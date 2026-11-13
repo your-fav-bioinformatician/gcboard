@@ -1,0 +1,52 @@
+# gcboard server configuration. Copy to config.toml and edit.
+# Every value below is the default; delete any line to keep the default.
+# Check it with: gcboard-admin --config config.toml validate-config
+
+[general]
+timezone = "UTC"                 # group time zone (IANA name) - open question 1 in the SRD
+daily_post_time = "00:00"        # HH:MM in the group time zone
+
+[server]
+database = "gcboard.db"          # SQLite file (WAL mode)
+admins = []                      # Codeforces handles with admin rights, e.g. ["your_handle"]
+min_client_version = "0.1.0"     # older clients are told to update
+requests_per_minute = 60         # per token
+codeforces_min_interval = 2.0    # seconds between Codeforces API calls
+challenge_minutes = 5            # login challenge window
+post_retry_minutes = 5           # retry gap when Codeforces is down at post time
+post_retry_hours = 6             # give up on the day after this long
+
+[tasks]
+rating_by_weekday = [800, 900, 1000, 1100, 1200, 1300, 1400]  # Mon..Sun
+rating_fallback_steps = [100, 200]
+excluded_tags = ["*special", "interactive"]
+base_max = 100
+base_step = 10
+base_min = 30
+runtime_bonus = [10, 6, 3]
+penalty_per_reject = 5
+penalty_cap = 20
+min_task_points = 10
+
+[projects]
+length_days = 14
+max_registration_loc = 50
+speed_max = 300
+speed_decay = 0.85
+speed_min = 90
+pass_threshold = 40
+
+[writeup]
+time_limit_minutes = 45
+min_words = [80, 100, 60, 60]
+autosave_seconds = 10
+max_chars_per_second = 25
+burst_allowance_chars = 50
+max_answer_chars = 10000
+
+[history]
+base = 0.4
+per_active_interval = 0.2
+dump_threshold = 0.70
+dump_multiplier = 0.75
+floor = 0.5
