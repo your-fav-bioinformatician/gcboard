@@ -3,8 +3,6 @@ server's started_at (FR-TASK-5, -6, -10, -11)."""
 
 from __future__ import annotations
 
-import webbrowser
-
 from rich.markup import escape
 from textual import work
 from textual.app import ComposeResult
@@ -13,6 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Static
 
 from gcboard.client.api import ApiError
+from gcboard.client.browser import open_url
 from gcboard.shared.schemas import TodayResponse
 
 from .common import ConfirmScreen, fmt_duration, fmt_local, row
@@ -108,7 +107,7 @@ class TodayScreen(Screen):
 
     def action_open_problem(self) -> None:
         if self.data and self.data.task and self.data.task.problem:
-            webbrowser.open(self.data.task.problem.url)
+            open_url(self.data.task.problem.url)
 
     def action_start(self) -> None:
         def answered(yes: bool | None) -> None:

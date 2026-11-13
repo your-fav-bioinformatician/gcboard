@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import webbrowser
-
 from rich.markup import escape
 from textual import work
 from textual.app import ComposeResult
@@ -12,6 +10,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, Static
 
 from gcboard.client.api import ApiError, save_token
+from gcboard.client.browser import open_url
 from gcboard.shared.schemas import ChallengeResponse
 
 from .common import fmt_duration
@@ -90,7 +89,7 @@ class LoginScreen(Screen):
 
     def action_open_problem(self) -> None:
         if self.challenge:
-            webbrowser.open(self.challenge.url)
+            open_url(self.challenge.url)
 
     def action_restart(self) -> None:
         self.challenge = None
