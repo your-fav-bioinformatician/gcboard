@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import tomllib
+from collections.abc import Mapping
 from datetime import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -198,3 +200,36 @@ class Config(_Section):
 def load_config(path: str | Path) -> Config:
     with open(path, "rb") as f:
         return Config.model_validate(tomllib.load(f))
+
+
+CONFIG_ENV = "GCBOARD_CONFIG_TOML"
+
+
+def load_server_config(path: str | Path, environ: Mapping[str, str] = os.environ) -> Config:
+    """The config file if it exists, else the whole TOML from the
+    GCBOARD_CONFIG_TOML variable (for hosts like Railway, where config lives
+    in service variables). Then platform defaults and the storage check."""
+    if Path(path).exists():
+        config = load_config(path)
+    elif environ.get(CONFIG_ENV):
+        config = Config.model_validate(tomllib.loads(environ[CONFIG_ENV]))
+    else:
+        raise ValueError(f"no config: create {path} or set the {CONFIG_ENV} variable to its contents")
+    return check_storage(config, environ)
+
+
+def check_storage(config: Config, environ: Mapping[str, str] = os.environ) -> Config:
+    """On Railway, keep the database on the attached volume: anything else is
+    wiped on every redeploy. With no database set, default to the volume."""
+    volume = environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+    on_railway = bool(environ.get("RAILWAY_PROJECT_ID") or environ.get("RAILWAY_ENVIRONMENT_NAME"))
+    if not on_railway and not volume:
+        return config
+    if not volume:
+        raise ValueError("no volume attached: attach a Railway volume (e.g. at /data) so the database survives redeploys")
+    if "database" not in config.server.model_fields_set:
+        config.server.database = str(Path(volume) / "gcboard.db")
+    db = Path(config.server.database)
+    if not db.is_absolute() or Path(volume).resolve() not in db.resolve().parents:
+        raise ValueError(f"database {db} is not on the volume {volume}; it would be lost on redeploy")
+    return config

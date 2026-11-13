@@ -47,6 +47,10 @@ def test_daily_backup_job_and_retention(app, cf, clock, config):
         asyncio.run(job.run())
     kept = list_backups(job.backup_dir)
     assert len(kept) == 14 and kept[-1].name == "gcboard-2026-12-01.db" and first not in kept
+    # Each backup is one self-contained file: no -wal/-shm left beside it.
+    assert sorted(p.name for p in job.backup_dir.iterdir()) == [p.name for p in kept]
+    check_backup(kept[-1])
+    assert sorted(p.name for p in job.backup_dir.iterdir()) == [p.name for p in kept]
 
 
 def test_tick_runs_the_backup(app, clock):

@@ -100,6 +100,32 @@ The restore is written to the audit log. Anything that happened after the backup
 was taken (logins, solves, saved writeup text) is lost. Members may need to log in
 again if their token is newer than the backup.
 
+## Deleting a member's data
+
+A member may ask the admin to delete everything gcboard stores about them
+(NFR-PRIV-1). First see what that covers:
+
+```bash
+uv run gcboard-admin --config /srv/gcboard/config.toml delete-member HANDLE --reason "asked by email"
+```
+
+Then delete it:
+
+```bash
+uv run gcboard-admin --config /srv/gcboard/config.toml delete-member HANDLE --reason "asked by email" --yes
+```
+
+This deletes the member's account, login tokens and challenges, task attempts,
+project entries, repo snapshots, and writeups. It is safe to run while the server
+is up. Everyone else's scores are recomputed as if the member never took part, so
+ranks on past tasks, projects, and weekly boards may shift.
+
+The audit log keeps its entries, but the member's handle in them is replaced with
+`deleted member #<id>`. Backups taken before the deletion still contain the data
+until they age out, which takes `backup_keep` days (14 by default).
+
+To remove someone from the boards without deleting their data, use `ban` instead.
+
 ## Upgrade
 
 1. Take a backup: `gcboard-admin backup`.

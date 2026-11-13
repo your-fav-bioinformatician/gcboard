@@ -54,6 +54,9 @@ def backup_to(db_path: Path, target: Path) -> Path:
         dst = sqlite3.connect(tmp)
         try:
             src.backup(dst)
+            # The copy inherits WAL mode; switch it to a single self-contained
+            # file, so reading or moving a backup never needs -wal/-shm files.
+            dst.execute("PRAGMA journal_mode=DELETE")
         finally:
             dst.close()
     finally:

@@ -93,8 +93,9 @@ uv run gcboard-admin validate-config
 uv run gcboard-server --config config.toml --host 127.0.0.1 --port 8000
 ```
 
-For a real deployment (systemd, HTTPS, backups, restore, upgrades), see
-[docs/operations.md](docs/operations.md). The short version: put it behind
+For a real deployment, see [docs/deploy-railway.md](docs/deploy-railway.md) for
+Railway (Dockerfile, volume, variables), or [docs/operations.md](docs/operations.md)
+for your own server (systemd, HTTPS, backups, restore, upgrades). The short version: put it behind
 HTTPS, for example with Caddy:
 
 ```
@@ -118,6 +119,7 @@ uv run gcboard-admin writeup HANDLE PROJECT_ID     # read a member's answers (lo
 uv run gcboard-admin reroll --reason "duplicate of a contest problem"   # only if nobody started
 uv run gcboard-admin void-attempt HANDLE 2026-11-13 --reason "..."
 uv run gcboard-admin ban HANDLE --reason "..."     # also: unban, revoke-tokens
+uv run gcboard-admin delete-member HANDLE --reason "..." [--yes]   # delete all their data; dry run without --yes
 uv run gcboard-admin recompute                     # rebuild every score from raw data
 uv run gcboard-admin backup                        # also: backups, restore FILE --yes (server stopped)
 uv run gcboard-admin sync-ratings                  # refresh Codeforces ratings now

@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.pytest_cache
+.coverage
+**/__pycache__
+*.db
+*.db-wal
+*.db-shm
+backups
+config.toml
+tests
+scripts
+docs

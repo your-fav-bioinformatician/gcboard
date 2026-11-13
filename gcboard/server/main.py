@@ -46,7 +46,7 @@ from gcboard.shared.schemas import (
 
 from . import board
 from .codeforces import CodeforcesAPI, CodeforcesClient, CodeforcesError, CodeforcesNotFound, problem_key, problem_url, submission_key
-from .config import Config, load_config
+from .config import Config, load_server_config
 from .errors import ApiError
 from .db import SchemaError
 from .db import AuthChallenge, DailyTask, TaskAttempt, Token, User, make_engine
@@ -516,15 +516,15 @@ def create_app(
 def run() -> None:
     parser = argparse.ArgumentParser(prog="gcboard-server", description="Run the gcboard API server.")
     parser.add_argument("--config", default=os.environ.get("GCBOARD_CONFIG", "config.toml"))
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     import uvicorn
 
     try:
-        app = create_app(load_config(args.config))
+        app = create_app(load_server_config(args.config))
     except (OSError, ValueError, SchemaError) as exc:  # bad config file, or a database from another version
         raise SystemExit(f"gcboard-server: {exc}")
     uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)

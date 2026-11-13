@@ -9,6 +9,21 @@ extended color codes and that a 79-column terminal shows the "enlarge" notice.
 The client tests also check every rendered screen for characters outside ASCII
 and box drawing (SRD 9.1).
 
+## Setup: a demo server
+
+You don't need real Codeforces or GitHub accounts. From the repository root, run:
+
+```bash
+uv run --extra server python scripts/demo_server.py --data /path/to/empty-folder
+```
+
+It prints the command for the terminal under test. That command logs you in as
+`demo`, with three other members on the board, an open daily task you haven't
+started, and an open project with a verified repo, so `s` on the Project screen
+starts a real writeup. For check 5, `curl -X POST http://127.0.0.1:8765/demo/ac`
+records an accepted solution. The demo folder is wiped and reseeded each time the
+server starts.
+
 ## Still to do by hand
 
 These things can only be checked in the real terminals: fonts, how each terminal
@@ -19,22 +34,27 @@ note what went wrong.
 
 | Check | Warp | Windows Terminal | iTerm2 | macOS Terminal | GNOME Terminal | Konsole | Alacritty | kitty | WezTerm |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1. Board renders; box lines join up | | | | | | | | | |
-| 2. Green accent and gray text readable | | | | | | | | | |
-| 3. `NO_COLOR=1 gcboard` readable | | | | | | | | | |
-| 4. Keys `l t p m ? r w q` all work | | | | | | | | | |
-| 5. Today: `s`, confirm, timer ticks | | | | | | | | | |
-| 6. Today: `o` opens the browser | | | | | | | | | |
-| 7. Writeup: `tab` / `shift+tab` switch answers | | | | | | | | | |
-| 8. Writeup: `ctrl+n` / `ctrl+p` scroll the code | | | | | | | | | |
-| 9. Writeup: `ctrl+s` submits (not frozen by XON/XOFF) | | | | | | | | | |
-| 10. Writeup: `ctrl+q` and `q` do nothing | | | | | | | | | |
-| 11. Writeup: terminal paste shortcut* | | | | | | | | | |
-| 12. Writeup: right-click / middle-click paste* | | | | | | | | | |
-| 13. Writeup: close the window, reopen, resumes | | | | | | | | | |
-| 14. Resize below 80x24 shows the notice; `q` quits | | | | | | | | | |
+| 1. Board renders; box lines join up | ok | | | | | | | | |
+| 2. Green accent and gray text readable | ok | | | | | | | | |
+| 3. `NO_COLOR=1 gcboard` readable | ok | | | | | | | | |
+| 4. Keys `l t p m ? r w q` all work | ok | | | | | | | | |
+| 5. Today: `s`, confirm, timer ticks | ok | | | | | | | | |
+| 6. Today: `o` opens the browser | ok* | | | | | | | | |
+| 7. Writeup: `tab` / `shift+tab` switch answers | ok | | | | | | | | |
+| 8. Writeup: `ctrl+n` / `ctrl+p` scroll the code | ok | | | | | | | | |
+| 9. Writeup: `ctrl+s` submits (not frozen by XON/XOFF) | ok | | | | | | | | |
+| 10. Writeup: `ctrl+q` and `q` do nothing | ok | | | | | | | | |
+| 11. Writeup: terminal paste shortcut* | ok | | | | | | | | |
+| 12. Writeup: right-click / middle-click paste* | ok | | | | | | | | |
+| 13. Writeup: close the window, reopen, resumes | ok | | | | | | | | |
+| 14. Resize below 80x24 shows the notice; `q` quits | ok | | | | | | | | |
 
-\* Record which of these happens:
+Warp: checked on Ubuntu (GNOME), Warp 0.2026.10.21. *Check 6 first opened a
+browser other than the default (Brave). Python's `webbrowser` treats `xdg-open`
+as failed when it exits at once, then tries further browsers on its list. It's fixed by opening links with `xdg-open` / `open` / the Windows
+handler directly, and needs re-checking on the next pass.
+
+\* For checks 11 and 12, record which of these happens:
 
 - **blocked**: "Pasting is disabled" appears. The terminal sent a bracketed paste,
   and the editor refused it.
