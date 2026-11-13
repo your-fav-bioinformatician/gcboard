@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import scoring
+from . import scoring, textrules
 from .timewin import parse_hhmm
 
 
@@ -117,6 +117,43 @@ class WriteupConfig(_Section):
     max_chars_per_second: int = 25
     burst_allowance_chars: int = 50
     max_answer_chars: int = 10000
+    # Grading constants (SRD 5.3)
+    gate_min_words: int = 20
+    gate_min_total: int = 150
+    gate_max_jaccard: float = 0.8
+    snippet_ids_target: int = 3
+    other_ids_target: int = 6
+    ttr_window: int = 100
+    ttr_target: float = 0.55
+    density_full: float = 0.20
+    density_zero: float = 0.45
+    sentence_min: int = 6
+    sentence_max: int = 35
+    sentence_hard_max: int = 80
+
+    @field_validator("min_words")
+    @classmethod
+    def _four(cls, v: list[int]) -> list[int]:
+        if len(v) != 4:
+            raise ValueError("min_words needs 4 values, one per question")
+        return v
+
+    def rules(self) -> "textrules.GradingRules":
+        return textrules.GradingRules(
+            min_words=tuple(self.min_words),  # type: ignore[arg-type]
+            gate_min_words=self.gate_min_words,
+            gate_min_total=self.gate_min_total,
+            gate_max_jaccard=self.gate_max_jaccard,
+            snippet_ids_target=self.snippet_ids_target,
+            other_ids_target=self.other_ids_target,
+            ttr_window=self.ttr_window,
+            ttr_target=self.ttr_target,
+            density_full=self.density_full,
+            density_zero=self.density_zero,
+            sentence_min=self.sentence_min,
+            sentence_max=self.sentence_max,
+            sentence_hard_max=self.sentence_hard_max,
+        )
 
 
 class HistoryConfig(_Section):

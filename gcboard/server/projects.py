@@ -1,5 +1,5 @@
 """Projects: repo registration and verification, snapshots, and submission
-(FR-PROJ-*). The writeup session that follows a submission arrives with M4.
+(FR-PROJ-*). Submitting starts the writeup session (see writeups.py).
 
 Projects open and close purely by their configured times (FR-PROJ-2), so
 there is no open/close state to keep in sync.
@@ -22,9 +22,10 @@ from gcboard.shared.schemas import EntryInfo, ProjectInfo, ProjectResponse, Snap
 
 from . import scoring
 from .config import Config
-from .db import EntryStatus, Project, ProjectEntry, RepoSnapshot, User
+from .db import EntryStatus, Project, ProjectEntry, RepoSnapshot, User, Writeup
 from .errors import ApiError
 from .repos import RepoError, RepoFiles, RepoHost, RepoRef, RepoUnavailable, parse_repo_url
+from .writeups import WriteupService, build_writeup
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,12 @@ ACTIVE = (EntryStatus.REGISTERED, EntryStatus.UNREACHABLE)
 
 def open_project(session: Session, now: float) -> Project | None:
     return session.exec(select(Project).where(Project.opens_at <= now, Project.closes_at > now)).first()
+
+
+def last_closed_project(session: Session, now: float) -> Project | None:
+    return session.exec(
+        select(Project).where(Project.closes_at <= now).order_by(Project.closes_at.desc())  # type: ignore[attr-defined]
+    ).first()
 
 
 def next_project(session: Session, now: float) -> Project | None:
@@ -71,11 +78,19 @@ def _ref(entry: ProjectEntry) -> RepoRef:
 
 
 class ProjectService:
-    def __init__(self, engine: Engine, config: Config, host: RepoHost, clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        engine: Engine,
+        config: Config,
+        host: RepoHost,
+        clock: Callable[[], float] = time.time,
+        writeups: WriteupService | None = None,
+    ):
         self.engine = engine
         self.config = config
         self.host = host
         self.clock = clock
+        self.writeups = writeups or WriteupService(engine, config, clock)
         self._locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._snapshot_failed_at: dict[int, float] = {}
 
@@ -84,7 +99,9 @@ class ProjectService:
     # ------------------------------------------------------------------
 
     def response(self, session: Session, user: User, now: float) -> ProjectResponse:
-        project = open_project(session, now)
+        """The open project, or else the most recent closed one (so members
+        can see their results), plus the next upcoming project."""
+        project = open_project(session, now) or last_closed_project(session, now)
         upcoming = next_project(session, now)
         entry = None
         if project is not None:
@@ -92,22 +109,24 @@ class ProjectService:
                 select(ProjectEntry).where(ProjectEntry.project_id == project.id, ProjectEntry.user_id == user.id)
             ).first()
             if e is not None:
-                entry = self.entry_info(session, e)
+                entry = self.entry_info(session, e, project)
         return ProjectResponse(
             server_time=now,
             project=ProjectInfo(
                 id=project.id, title=project.title, spec_md=project.spec_md,
-                opens_at=project.opens_at, closes_at=project.closes_at,
+                opens_at=project.opens_at, closes_at=project.closes_at, is_open=project.closes_at > now,
             ) if project else None,
             upcoming=UpcomingProject(
                 id=upcoming.id, title=upcoming.title, opens_at=upcoming.opens_at, closes_at=upcoming.closes_at
             ) if upcoming else None,
             entry=entry,
             max_registration_loc=self.config.projects.max_registration_loc,
+            writeup_minutes=self.config.writeup.time_limit_minutes,
         )
 
-    def entry_info(self, session: Session, e: ProjectEntry) -> EntryInfo:
+    def entry_info(self, session: Session, e: ProjectEntry, project: Project) -> EntryInfo:
         snaps = snapshots_of(session, e.id)
+        w = session.exec(select(Writeup).where(Writeup.entry_id == e.id)).first()
         return EntryInfo(
             repo_url=e.repo_url,
             status=e.status,
@@ -121,6 +140,10 @@ class ProjectService:
                 SnapshotInfo(taken_at=s.taken_at, kind=s.kind, head_sha=s.head_sha, source_loc=s.source_loc)
                 for s in snaps
             ],
+            writeup=self.writeups.result_view(w),
+            submit_rank=e.submit_rank,
+            points=e.points,
+            provisional=project.finalized_at is None,
         )
 
     # ------------------------------------------------------------------
@@ -226,12 +249,10 @@ class ProjectService:
                 s.add(entry)
                 s.commit()
 
-    async def submit(self, user: User, project_id: int) -> RepoFiles:
-        """FR-PROJ-7/8: freeze HEAD and take the final snapshot. Once and only once.
-
-        Returns the frozen files so M4 can extract identifiers and pick the
-        writeup snippet from data captured right now (FR-PROJ-9).
-        """
+    async def submit(self, user: User, project_id: int) -> None:
+        """FR-PROJ-7/8: freeze HEAD, take the final snapshot, and start the
+        writeup, all at once. Identifiers and the snippet come from the
+        frozen files captured right now (FR-PROJ-9). Once and only once."""
         async with self._locks[user.id]:
             now = int(self.clock())
             with Session(self.engine) as s:
@@ -258,9 +279,9 @@ class ProjectService:
                 entry.history_factor = history_of(snapshots_of(s, entry_id), self.config)
                 entry.status = EntryStatus.SUBMITTED
                 s.add(entry)
+                s.add(build_writeup(entry, s.get(Project, project_id), files, self.config, now))
                 s.commit()
-            log.info("entry %s submitted at %s", entry_id, head)
-            return files
+            log.info("entry %s submitted at %s; writeup started", entry_id, head)
 
     # ------------------------------------------------------------------
     # Daily snapshots (FR-PROJ-6)

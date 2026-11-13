@@ -41,13 +41,50 @@ class VerifyResponse(BaseModel):
     is_admin: bool
 
 
+class SnippetInfo(BaseModel):
+    path: str
+    start: int
+    end: int
+    text: str
+
+
+class WriteupSession(BaseModel):
+    """An open writeup: while this exists the client shows nothing else."""
+
+    server_time: float
+    questions: list[str]
+    snippet: SnippetInfo
+    started_at: int
+    deadline: int
+    answers: list[str]  # last accepted text
+    min_words: list[int]
+    autosave_seconds: int
+    max_answer_chars: int
+
+
+class DraftRequest(BaseModel):
+    answers: list[str] = Field(min_length=4, max_length=4)
+
+
+class SubmitWriteupRequest(BaseModel):
+    answers: list[str] | None = Field(default=None, min_length=4, max_length=4)
+
+
+class WriteupResult(BaseModel):
+    score: float
+    passed: bool  # at or above the project pass threshold
+    auto_submitted: bool
+    submitted_at: int
+    breakdown: dict[str, Any]
+
+
 class Me(BaseModel):
     cf_handle: str
     is_admin: bool
     cf_rating: int | None
     cf_rank: str | None
     joined_at: int
-    writeup: dict[str, Any] | None = None  # open writeup session (M4)
+    writeup: WriteupSession | None = None  # open writeup session: the client locks onto it
 
 
 class ProblemInfo(BaseModel):
@@ -157,6 +194,10 @@ class EntryInfo(BaseModel):
     frozen_sha: str | None
     history_factor: float | None  # final once submitted; otherwise "if you submitted now"
     snapshots: list[SnapshotInfo]
+    writeup: WriteupResult | None = None
+    submit_rank: int | None = None  # among qualified entries
+    points: int = 0
+    provisional: bool = True  # until the project closes and every writeup has ended
 
 
 class ProjectInfo(BaseModel):
@@ -167,6 +208,7 @@ class ProjectInfo(BaseModel):
     spec_md: str
     opens_at: int
     closes_at: int
+    is_open: bool = True  # False: the most recent project, already closed
 
 
 class UpcomingProject(BaseModel):
@@ -182,3 +224,4 @@ class ProjectResponse(BaseModel):
     upcoming: UpcomingProject | None
     entry: EntryInfo | None
     max_registration_loc: int
+    writeup_minutes: int

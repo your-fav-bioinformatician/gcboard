@@ -46,6 +46,19 @@ autosave_seconds = 10
 max_chars_per_second = 25
 burst_allowance_chars = 50
 max_answer_chars = 10000
+# Grading (SRD 5.3)
+gate_min_words = 20              # score 0 if any answer is shorter
+gate_min_total = 150             # ...or all answers together are shorter
+gate_max_jaccard = 0.8           # ...or two answers share more of their words
+snippet_ids_target = 3           # snippet identifiers named in Q1 for full marks
+other_ids_target = 6             # other repo identifiers named in Q2-Q4 for full marks
+ttr_window = 100
+ttr_target = 0.55
+density_full = 0.20
+density_zero = 0.45
+sentence_min = 6
+sentence_max = 35
+sentence_hard_max = 80
 
 [history]
 base = 0.4

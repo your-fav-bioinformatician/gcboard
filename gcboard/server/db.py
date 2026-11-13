@@ -1,7 +1,6 @@
 """Database tables (SRD section 6). SQLite in WAL mode via SQLModel.
 
-Timestamps are integer Unix epoch seconds (UTC) throughout. The writeups
-table arrives with milestone M4.
+Timestamps are integer Unix epoch seconds (UTC) throughout.
 """
 
 from __future__ import annotations
@@ -90,7 +89,7 @@ class EntryStatus:
     PENDING = "pending"  # registered, .gcboard not verified yet
     REGISTERED = "registered"  # verified; snapshots running
     UNREACHABLE = "unreachable"  # last snapshot failed (repo private or deleted)
-    SUBMITTED = "submitted"  # frozen; writeup comes next (M4)
+    SUBMITTED = "submitted"  # frozen; the writeup starts at the same moment
     VOID = "void"  # voided by the admin
 
 
@@ -131,6 +130,30 @@ class RepoSnapshot(SQLModel, table=True):
     source_loc: int
 
 
+class Writeup(SQLModel, table=True):
+    """The timed writeup for one entry. Only the latest accepted text is kept
+    (FR-WRITE-6); there is no typing history."""
+
+    __tablename__ = "writeups"
+    id: int | None = Field(default=None, primary_key=True)
+    entry_id: int = Field(foreign_key="project_entries.id", unique=True, index=True)
+    snippet_path: str
+    snippet_start: int
+    snippet_end: int
+    snippet_text: str
+    snippet_identifiers: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    repo_identifiers: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    questions: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    answers: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    started_at: int
+    deadline: int = Field(index=True)
+    last_saved_at: int
+    submitted_at: int | None = None
+    auto_submitted: bool = False
+    score: float | None = None
+    breakdown: dict | None = Field(default=None, sa_column=Column(JSON))
+
+
 class AuditLog(SQLModel, table=True):
     __tablename__ = "audit_log"
     id: int | None = Field(default=None, primary_key=True)
@@ -169,5 +192,6 @@ __all__ = [
     "TaskAttempt",
     "Token",
     "User",
+    "Writeup",
     "make_engine",
 ]

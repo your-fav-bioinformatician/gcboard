@@ -19,8 +19,9 @@ from sqlmodel import Session, func, select
 
 from .codeforces import CodeforcesClient
 from .config import Config, load_config
-from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, make_engine
+from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, Writeup, make_engine
 from .projects import overlapping
+from .writeups import WriteupService
 from .jobs import Jobs
 from .timewin import current_window
 
@@ -104,6 +105,9 @@ def main(argv: list[str] | None = None) -> None:
     pe.add_argument("project_id", type=int)
     pe.add_argument("file")
     pe.add_argument("--reason", required=True)
+    wv = sub.add_parser("writeup", help="show a member's writeup answers and score (admin only, FR-PROF-3)")
+    wv.add_argument("handle")
+    wv.add_argument("project_id", type=int)
     ve = sub.add_parser("void-entry", help="void a member's project entry")
     ve.add_argument("handle")
     ve.add_argument("project_id", type=int)
@@ -193,8 +197,37 @@ def main(argv: list[str] | None = None) -> None:
         print(f"synced {n} members")
         return
 
+    writeups = WriteupService(engine, config)
+
+    if args.cmd == "writeup":
+        with Session(engine) as s:
+            u = _user(s, args.handle)
+            row = s.exec(
+                select(Writeup)
+                .join(ProjectEntry, ProjectEntry.id == Writeup.entry_id)
+                .where(ProjectEntry.user_id == u.id, ProjectEntry.project_id == args.project_id)
+            ).first()
+            if row is None:
+                sys.exit(f"{u.cf_handle} has no writeup for project {args.project_id}")
+            state = "open" if row.submitted_at is None else ("auto-submitted" if row.auto_submitted else "submitted")
+            print(f"{u.cf_handle} - project {args.project_id} - {state} - score {row.score}")
+            print(f"snippet: {row.snippet_path} lines {row.snippet_start}-{row.snippet_end}")
+            for i, (q, a) in enumerate(zip(row.questions, row.answers), 1):
+                print(f"\nQ{i}. {q}\n{'-' * 60}\n{a or '(empty)'}")
+            if row.breakdown:
+                b = row.breakdown
+                print("\n" + "  ".join(f"{k} {b[k]}" for k in (
+                    "completeness", "grounding", "change_relevance", "variety", "identifier_density", "sentences")))
+                if not b.get("gate_passed", True):
+                    print(f"gate failed: {b.get('gate_reason')}")
+            _audit(s, config, args.admin, "view-writeup", f"{u.cf_handle} project {args.project_id}", "viewed")
+            s.commit()
+        return
+
     if args.cmd == "recompute":
         n = jobs.recompute_all()
+        w = writeups.regrade_all()
+        print(f"regraded {w} writeups and rescored every project")
         with Session(engine) as s:
             _audit(s, config, args.admin, "recompute", "all", "manual recompute")
             s.commit()
@@ -248,8 +281,9 @@ def main(argv: list[str] | None = None) -> None:
             s.add(a)
         _audit(s, config, args.admin, args.cmd, u.cf_handle, args.reason)
         s.commit()
-    if args.cmd in ("ban", "unban", "void-attempt"):
+    if args.cmd in ("ban", "unban", "void-attempt", "void-entry"):
         jobs.recompute_all()  # banned and voided attempts no longer push others down
+        writeups.regrade_all()  # ...nor banned members and voided entries in projects
     print(f"{args.cmd} {args.handle}: done")
 
 

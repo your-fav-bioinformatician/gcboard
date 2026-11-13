@@ -31,8 +31,12 @@ from gcboard.shared.schemas import (
     Me,
     ProblemInfo,
     Profile,
+    DraftRequest,
     ProjectResponse,
     RegisterRequest,
+    SubmitWriteupRequest,
+    WriteupResult,
+    WriteupSession,
     RulesResponse,
     TimeResponse,
     TodayResponse,
@@ -47,6 +51,7 @@ from .errors import ApiError
 from .db import AuthChallenge, DailyTask, TaskAttempt, Token, User, make_engine
 from .jobs import Jobs, start_scheduler
 from .projects import ProjectService
+from .writeups import WriteupService
 from .repos import GitHubClient, RepoHost
 
 log = logging.getLogger("gcboard")
@@ -302,14 +307,15 @@ async def auth_verify(body: HandleRequest, request: Request, session: SessionDep
 
 
 @router.get("/me", response_model=Me)
-def get_me(user: UserDep) -> Me:
+def get_me(request: Request, user: UserDep) -> Me:
+    """Includes any open writeup, so the client can lock onto it at once (FR-WRITE-7)."""
     return Me(
         cf_handle=user.cf_handle,
         is_admin=user.is_admin,
         cf_rating=user.cf_rating,
         cf_rank=user.cf_rank,
         joined_at=user.joined_at,
-        writeup=None,
+        writeup=request.app.state.writeups.current(user),
     )
 
 
@@ -375,12 +381,35 @@ async def verify_repo(project_id: int, request: Request, session: SessionDep, us
     return svc.response(session, user, now_of(request))
 
 
-@router.post("/projects/{project_id}/submit", response_model=ProjectResponse)
-async def submit_project(project_id: int, request: Request, session: SessionDep, user: UserDep) -> ProjectResponse:
-    """FR-PROJ-7. The writeup session starts here once M4 lands."""
-    svc: ProjectService = request.app.state.projects
-    await svc.submit(user, project_id)
-    return svc.response(session, user, now_of(request))
+@router.post("/projects/{project_id}/submit", response_model=WriteupSession)
+async def submit_project(project_id: int, request: Request, user: UserDep) -> WriteupSession:
+    """FR-PROJ-7: freezes the entry and starts the writeup. Returns its
+    questions, snippet, and deadline."""
+    await request.app.state.projects.submit(user, project_id)
+    session = request.app.state.writeups.current(user)
+    if session is None:  # only if the time limit were zero
+        raise ApiError(409, "deadline_passed", "The writeup has already ended.")
+    return session
+
+
+@router.get("/writeups/current", response_model=WriteupSession)
+def get_writeup(request: Request, user: UserDep) -> WriteupSession:
+    session = request.app.state.writeups.current(user)
+    if session is None:
+        raise ApiError(404, "no_writeup", "You have no open writeup.")
+    return session
+
+
+@router.put("/writeups/current/draft", response_model=WriteupSession)
+def save_draft(body: DraftRequest, request: Request, user: UserDep) -> WriteupSession:
+    """FR-WRITE-5/6: rate-checked autosave. 409 carries the last accepted text."""
+    return request.app.state.writeups.save(user, body.answers)
+
+
+@router.post("/writeups/current/submit", response_model=WriteupResult)
+def submit_writeup(body: SubmitWriteupRequest, request: Request, user: UserDep) -> WriteupResult:
+    """FR-WRITE-8/10: final submit, graded immediately."""
+    return request.app.state.writeups.submit(user, body.answers)
 
 
 @router.get("/rules", response_model=RulesResponse)
@@ -415,7 +444,8 @@ def create_app(
         token=os.environ.get("GCBOARD_GITHUB_TOKEN") or config.server.github_token,
         max_bytes=config.projects.max_repo_mb * 1024 * 1024,
     )
-    projects = ProjectService(engine, config, repos, clock)
+    writeups = WriteupService(engine, config, clock)
+    projects = ProjectService(engine, config, repos, clock, writeups=writeups)
     jobs = Jobs(engine, config, cf, clock, projects=projects)
 
     @asynccontextmanager
@@ -431,12 +461,13 @@ def create_app(
     app.state.cf = cf
     app.state.jobs = jobs
     app.state.projects = projects
+    app.state.writeups = writeups
     app.state.clock = clock
     app.state.limiter = RateLimiter(config.server.requests_per_minute)
 
     @app.exception_handler(ApiError)
     async def _api_error(_req: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse({"error": exc.error, "message": exc.message}, status_code=exc.status)
+        return JSONResponse(exc.body(), status_code=exc.status)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException) -> JSONResponse:

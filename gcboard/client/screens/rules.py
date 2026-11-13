@@ -42,9 +42,26 @@ def render_rules(r: RulesResponse) -> str:
             f"  x {h['dump_multiplier']:g} if one interval added more than {h['dump_threshold']:.0%} of the final code;"
             f" never below {h['floor']:g}",
             "",
-            "[b $accent]Writeup[/]",
-            f"  {w['time_limit_minutes']} minutes, locked screen, no pasting. Minimum words per answer:"
-            f" {', '.join(map(str, w['min_words']))}.",
+            "[b $accent]Writeup[/] (scored by plain text rules, no AI)",
+            f"  {w['time_limit_minutes']} minutes from submitting, locked screen, no pasting, autosaved every"
+            f" {w['autosave_seconds']}s.",
+            f"  Saves growing faster than {w['max_chars_per_second']} characters/second"
+            f" (+{w['burst_allowance_chars']}) are rejected.",
+            f"  Minimum words: Q1 {w['min_words'][0]}, Q2 {w['min_words'][1]}, Q3 {w['min_words'][2]},"
+            f" Q4 {w['min_words'][3]}.",
+            f"  Score 0 if any answer has under {w['gate_min_words']} words, the total is under"
+            f" {w['gate_min_total']}, or two answers share over {w['gate_max_jaccard']:.0%} of their words.",
+            "  completeness       20  x average of min(1, words / minimum)",
+            f"  grounding          30  15 for naming {w['snippet_ids_target']} identifiers from the snippet in Q1,"
+            f" 15 for {w['other_ids_target']} other repo identifiers in Q2-Q4",
+            "  change relevance   25  x share of the project's keyword groups used in Q3",
+            f"  variety            10  x min(1, type-token ratio of each answer's first {w['ttr_window']} words"
+            f" / {w['ttr_target']:g})",
+            f"  identifier density 10  full at <= {w['density_full']:.0%} code-like words, 0 at"
+            f" >= {w['density_zero']:.0%}",
+            f"  sentences           5  average {w['sentence_min']}-{w['sentence_max']} words,"
+            f" none over {w['sentence_hard_max']}",
+            f"  Entries need {p['pass_threshold']:g}+ to qualify for project points.",
             "",
             "[b $accent]Leaderboard ties[/]",
             "  1. more tasks solved  2. lower total solve time  3. reached the total first",

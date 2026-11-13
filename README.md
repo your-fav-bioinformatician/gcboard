@@ -24,8 +24,8 @@ The full specification is in [docs/SRD.md](docs/SRD.md).
 | --- | --- |
 | **M1 Core**: server, login challenge, daily task posting, start/verify, task scoring, weekly board, client login/board/today screens | done |
 | **M2 Profiles**: profiles, streaks, weekly wins, all-time board, rating sync, rules screen, admin CLI basics | done |
-| **M3 Projects**: schedule, repo registration and verification, snapshots, history factor, project screen | done (submitting freezes the repo; the writeup that follows is M4) |
-| M4 Writeups: snippets, identifiers, locked editor, grading | not started |
+| **M3 Projects**: schedule, repo registration and verification, snapshots, history factor, project screen | done |
+| **M4 Writeups**: identifiers, snippets, locked paste-free editor, rate-checked autosave, grading, project points and finalization | done |
 | M5 Hardening: backups, terminal compatibility pass | CI runs on Linux, macOS, Windows |
 
 ## For members: install the client
@@ -52,6 +52,15 @@ repo. Commit a file named `.gcboard` containing the code gcboard shows you, push
 press `v`. The server snapshots your repo every day at midday. Press `s` to submit
 when you're done. This freezes your repo at that commit, and you can only submit once.
 
+**The writeup** starts the moment you submit. For 45 minutes gcboard shows only the
+writeup: four questions about your own code, including a 15-line snippet picked from
+your submission. You can't leave, quit, or paste, and answers are saved every 10
+seconds. Text that appears faster than anyone can type is rolled back. Closing the
+app doesn't pause the clock; open it again to continue. Press `ctrl+s` to submit
+early once every answer meets its minimum length. At the deadline, your last saved
+text is submitted for you. The score and its breakdown appear on the project
+screen straight away.
+
 **Logging in:** enter your Codeforces handle. gcboard picks a random problem; submit
 anything that fails with `COMPILATION_ERROR` within 5 minutes, then press `v`.
 
@@ -68,7 +77,10 @@ anything that fails with `COMPILATION_ERROR` within 5 minutes, then press `v`.
 | `o` | open the problem in your browser |
 | `e` / `v` | register / verify your project repo (Project) |
 | `r` | refresh |
-| `q` | quit |
+| `tab` / `shift+tab` | next / previous answer (Writeup) |
+| `ctrl+down` / `ctrl+up` | scroll the code snippet (Writeup) |
+| `ctrl+s` | submit the writeup |
+| `q` | quit (not during a writeup) |
 
 ## For the admin: run the server
 
@@ -100,6 +112,7 @@ verification but never change a score.
 uv run gcboard-admin users
 uv run gcboard-admin project-create examples/project.example.toml   # also: projects, project-edit
 uv run gcboard-admin void-entry HANDLE PROJECT_ID --reason "..."
+uv run gcboard-admin writeup HANDLE PROJECT_ID     # read a member's answers (logged in the audit log)
 uv run gcboard-admin reroll --reason "duplicate of a contest problem"   # only if nobody started
 uv run gcboard-admin void-attempt HANDLE 2026-11-13 --reason "..."
 uv run gcboard-admin ban HANDLE --reason "..."     # also: unban, revoke-tokens
@@ -132,6 +145,8 @@ gcboard/
 │  ├─ codeforces.py  rate-limited API wrapper, picker, verifier
 │  ├─ repos.py       GitHub reads, source files, line counts
 │  ├─ projects.py    registration, verification, snapshots, submission
+│  ├─ writeups.py    writeup sessions, project scoring and finalization
+│  ├─ textrules.py   identifiers, snippets, writeup grading (SRD 5.3)
 │  ├─ scoring.py     section 5 as pure functions
 │  ├─ jobs.py        scheduled jobs
 │  ├─ board.py       leaderboards, streaks, profiles
@@ -152,6 +167,17 @@ dependencies; the server needs the `server` extra.
 - All server timestamps are Unix epoch seconds; calendar logic lives in `timewin.py`.
 - A submission still being judged before a member's first AC holds back task
   finalization for up to an hour after close, so a late verdict isn't missed.
+- Project points count in the week the project closes (its `closes_at`), so a
+  project closing Monday 00:00 counts in the week starting that Monday. They stay
+  provisional (`~`) until every writeup has ended and the project is finalized.
+- Identifier mentions are case-insensitive, as SRD 5.3 says. A prose word like
+  "board" therefore counts as mentioning a `Board` class, and file names
+  (`game.py` -> `game`) count too.
+- Grounding expects 6 non-snippet identifiers in Q2-Q4 even for small repos, as
+  written in 5.3. For tiny repos, snippet selection lowers its 30-line file bar
+  step by step, so there is always a snippet.
+- "Code-like" words for identifier density are repo identifiers plus snake_case,
+  camelCase, `call()`, and `obj.method` tokens.
 - Weekly wins and best weekly finish count only completed weeks (Monday to Sunday
   in the group time zone); a tie for first gives every tied member a win.
 - Repos are read as one GitHub tarball per commit, in memory: nothing is unpacked

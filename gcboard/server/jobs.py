@@ -301,11 +301,16 @@ class Jobs:
         return len(infos)
 
     async def tick(self) -> None:
-        """Every minute: post today's task when due, close finished tasks, and
-        take the day's repo snapshots once snapshot_time has passed."""
+        """Every minute: post today's task when due, close finished tasks,
+        take the day's repo snapshots once snapshot_time has passed,
+        auto-submit expired writeups, and finalize finished projects."""
         jobs = [self.post_daily_task, self.close_due_tasks]
         if self.projects is not None:
-            jobs.append(self.projects.daily_snapshots)
+            jobs += [
+                self.projects.daily_snapshots,
+                self.projects.writeups.sweep,  # sweep_writeups (section 8)
+                self.projects.writeups.finalize_projects,  # finalize_project
+            ]
         for job in jobs:
             try:
                 await job()
