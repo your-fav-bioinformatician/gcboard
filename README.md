@@ -118,6 +118,7 @@ uv run gcboard-admin writeup HANDLE PROJECT_ID     # read a member's answers (lo
 uv run gcboard-admin reroll --reason "duplicate of a contest problem"   # only if nobody started
 uv run gcboard-admin void-attempt HANDLE 2026-11-13 --reason "..."
 uv run gcboard-admin ban HANDLE --reason "..."     # also: unban, revoke-tokens
+uv run gcboard-admin delete-member HANDLE --reason "..." [--yes]   # delete all their data; dry run without --yes
 uv run gcboard-admin recompute                     # rebuild every score from raw data
 uv run gcboard-admin backup                        # also: backups, restore FILE --yes (server stopped)
 uv run gcboard-admin sync-ratings                  # refresh Codeforces ratings now

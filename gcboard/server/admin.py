@@ -160,6 +160,10 @@ def _main(argv: list[str] | None = None) -> None:
     wv = sub.add_parser("writeup", help="show a member's writeup answers and score (admin only, FR-PROF-3)")
     wv.add_argument("handle")
     wv.add_argument("project_id", type=int)
+    dm = sub.add_parser("delete-member", help="delete a member and all their data (NFR-PRIV-1)")
+    dm.add_argument("handle")
+    dm.add_argument("--reason", required=True)
+    dm.add_argument("--yes", action="store_true", help="really delete; without it, only list what would go")
     ve = sub.add_parser("void-entry", help="void a member's project entry")
     ve.add_argument("handle")
     ve.add_argument("project_id", type=int)
@@ -278,6 +282,28 @@ def _main(argv: list[str] | None = None) -> None:
                     print(f"gate failed: {b.get('gate_reason')}")
             _audit(s, config, args.admin, "view-writeup", f"{u.cf_handle} project {args.project_id}", "viewed")
             s.commit()
+        return
+
+    if args.cmd == "delete-member":
+        from .members import delete_member, member_data
+
+        with Session(engine) as s:
+            u = _user(s, args.handle)
+            handle, uid = u.cf_handle, u.id
+            if not args.yes:
+                print(f"Would delete {handle} (member #{uid}) and:")
+                for name, rows in member_data(s, u).items():
+                    print(f"  {len(rows):>4} {name}")
+                print("Run again with --yes to delete. This cannot be undone (except from a backup).")
+                return
+            counts = delete_member(s, u)
+            _audit(s, config, args.admin, "delete-member", f"member #{uid}", args.reason)
+            s.commit()
+        jobs.recompute_all()  # the member no longer pushes anyone down
+        writeups.regrade_all()
+        print(f"deleted {handle} (member #{uid}): " + ", ".join(f"{n} {k}" for k, n in counts.items()))
+        print(f"Backups taken before now still contain this data until they age out "
+              f"(the newest {config.server.backup_keep} are kept).")
         return
 
     if args.cmd == "recompute":
