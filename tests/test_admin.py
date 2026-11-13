@@ -7,7 +7,7 @@ from gcboard.server.db import User, make_engine
 def test_ban_is_audited(tmp_path, capsys):
     db = tmp_path / "a.db"
     cfg = tmp_path / "config.toml"
-    cfg.write_text(f'[server]\ndatabase = "{db}"\nadmins = ["Boss"]\n')
+    cfg.write_text(f"[server]\ndatabase = '{db}'\nadmins = ['Boss']\n")  # literal string: Windows paths
     with Session(make_engine(str(db))) as s:
         s.add(User(cf_handle="Boss", joined_at=0, is_admin=True))
         s.add(User(cf_handle="noor", joined_at=0))
