@@ -97,6 +97,28 @@ def test_login_today_and_board(server, cf, clock, tmp_path):
             assert table.get_row_at(0) == ["1", "noor", "~110", "1", "1d"]
             app.save_screenshot(str(tmp_path / "board.svg"))
 
+            # Enter on a leaderboard row opens that member's profile; escape goes back.
+            from gcboard.client.screens.profile import ProfileScreen
+
+            await pilot.press("enter")
+            await settle(pilot)
+            assert isinstance(app.screen, ProfileScreen) and len(app.screen_stack) == 2
+            prof = text(app, "#profile")
+            assert "1 this week · 1 all time" in prof and "fastest 5:00" in prof
+            await pilot.press("escape")
+            await settle(pilot)
+            assert len(app.screen_stack) == 1 and app.current_mode == "board"
+
+            # m opens my own profile; l returns to the board from a pushed profile.
+            await pilot.press("m")
+            await settle(pilot)
+            assert app.current_mode == "me" and "profile noor" in text(app, "#profile-title")
+            await pilot.press("l", "enter")
+            await settle(pilot)
+            await pilot.press("l")
+            await settle(pilot)
+            assert app.current_mode == "board" and len(app.screen_stack) == 1
+
             await pilot.press("question_mark")
             await settle(pilot)
             assert "max(30, 100 - 10" in text(app, "#rules")

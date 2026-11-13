@@ -99,6 +99,34 @@ class LeaderboardResponse(BaseModel):
     rows: list[BoardRow]
 
 
+class ProjectHistoryRow(BaseModel):
+    title: str
+    submit_rank: int | None
+    writeup_score: float | None
+    history_factor: float | None
+    points: int
+    provisional: bool
+
+
+class Profile(BaseModel):
+    """FR-PROF-1. Visible to every member; writeup answers are never included."""
+
+    cf_handle: str
+    cf_rating: int | None
+    cf_rank: str | None
+    rating_synced_at: int | None
+    joined_at: int
+    current_streak: int
+    best_streak: int
+    solved_week: int
+    solved_all: int
+    avg_solve_seconds: int | None
+    fastest_solve_seconds: int | None
+    weekly_wins: int
+    best_weekly_finish: int | None
+    projects: list[ProjectHistoryRow]
+
+
 class RulesResponse(BaseModel):
     timezone: str
     daily_post_time: str

@@ -30,6 +30,7 @@ from gcboard.shared.schemas import (
     LeaderboardResponse,
     Me,
     ProblemInfo,
+    Profile,
     RulesResponse,
     TimeResponse,
     TodayResponse,
@@ -317,6 +318,15 @@ def get_leaderboard(
     request: Request, session: SessionDep, _user: UserDep, period: Literal["week", "all"] = Query("week")
 ) -> LeaderboardResponse:
     return board.leaderboard(session, request.app.state.config, period, now_of(request))
+
+
+@router.get("/users/{handle}", response_model=Profile)
+def get_profile(handle: str, request: Request, session: SessionDep, _user: UserDep) -> Profile:
+    """FR-PROF-1/3: any member can see any profile; banned members are hidden."""
+    target = find_user(session, handle)
+    if target is None or target.banned:
+        raise ApiError(404, "user_not_found", f"No member named {handle!r}.")
+    return board.profile(session, request.app.state.config, target, now_of(request))
 
 
 @router.get("/tasks/today", response_model=TodayResponse)

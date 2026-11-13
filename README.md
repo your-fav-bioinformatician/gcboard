@@ -23,7 +23,7 @@ The full specification is in [docs/SRD.md](docs/SRD.md).
 | Milestone | State |
 | --- | --- |
 | **M1 Core**: server, login challenge, daily task posting, start/verify, task scoring, weekly board, client login/board/today screens | done |
-| M2 Profiles: profiles, all-time board, rating sync, rules screen, admin CLI | partly done (all-time board, rules screen, admin CLI basics) |
+| **M2 Profiles**: profiles, streaks, weekly wins, all-time board, rating sync, rules screen, admin CLI basics | done |
 | M3 Projects: schedule, repo registration, snapshots, history factor | scoring formulas only (`history_factor`, `score_project`) |
 | M4 Writeups: snippets, identifiers, locked editor, grading | not started |
 | M5 Hardening: backups, terminal compatibility pass | CI runs on Linux, macOS, Windows |
@@ -54,6 +54,8 @@ anything that fails with `COMPILATION_ERROR` within 5 minutes, then press `v`.
 | --- | --- |
 | `l` | leaderboard |
 | `t` | today's task |
+| `m` | my profile |
+| `enter` | open the selected member's profile (leaderboard) |
 | `?` | rules |
 | `w` | week / all-time (leaderboard) |
 | `s` | start today's task |
@@ -80,7 +82,8 @@ gcboard.example.org {
 ```
 
 The server posts the daily task at the configured time, checks Codeforces for ACs
-every 2 minutes, and finalizes each task at close. Codeforces outages delay
+every 2 minutes, finalizes each task at close, and refreshes members' Codeforces
+ratings once a day. Codeforces outages delay
 verification but never change a score.
 
 ### Admin CLI
@@ -91,6 +94,8 @@ uv run gcboard-admin reroll --reason "duplicate of a contest problem"   # only i
 uv run gcboard-admin void-attempt HANDLE 2026-11-13 --reason "..."
 uv run gcboard-admin ban HANDLE --reason "..."     # also: unban, revoke-tokens
 uv run gcboard-admin recompute                     # rebuild every score from raw data
+uv run gcboard-admin sync-ratings                  # refresh Codeforces ratings now
+uv run gcboard-admin audit                         # show the audit log
 ```
 
 Every action is written to the audit log.
@@ -117,7 +122,7 @@ gcboard/
 │  ├─ codeforces.py  rate-limited API wrapper, picker, verifier
 │  ├─ scoring.py     section 5 as pure functions
 │  ├─ jobs.py        scheduled jobs
-│  ├─ board.py       leaderboards and streaks
+│  ├─ board.py       leaderboards, streaks, profiles
 │  ├─ timewin.py     day and week boundaries in the group time zone
 │  ├─ config.py      config.toml schema
 │  └─ admin.py       gcboard-admin CLI
@@ -135,5 +140,7 @@ dependencies; the server needs the `server` extra.
 - All server timestamps are Unix epoch seconds; calendar logic lives in `timewin.py`.
 - A submission still being judged before a member's first AC holds back task
   finalization for up to an hour after close, so a late verdict isn't missed.
+- Weekly wins and best weekly finish count only completed weeks (Monday to Sunday
+  in the group time zone); a tie for first gives every tied member a win.
 - Attempts have `voided_at`/`void_reason` columns (not in SRD section 6) to support
   `void-attempt`.

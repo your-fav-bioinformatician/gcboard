@@ -22,6 +22,7 @@ from .codeforces import (
     PENDING,
     CodeforcesAPI,
     CodeforcesError,
+    CodeforcesNotFound,
     ProblemKey,
     evaluate_attempt,
     pick_problem,
@@ -34,6 +35,11 @@ from .db import DailyTask, TaskAttempt, User
 from .timewin import current_window
 
 log = logging.getLogger(__name__)
+
+# Ratings older than this are refreshed by sync_ratings (section 8: daily).
+RATING_MAX_AGE_SECONDS = 24 * 3600
+# Handles per user.info call.
+RATING_BATCH = 100
 
 # How long past close a submission stuck "in queue" may hold up finalization.
 PENDING_GRACE_SECONDS = 3600
@@ -249,6 +255,45 @@ class Jobs:
                     s.commit()
                 log.info("finalized task %s", task_id)
 
+    async def sync_ratings(self, *, force: bool = False) -> int:
+        """Refresh Codeforces rating and rank for members whose data is over a
+        day old (or everyone, with force). Returns how many were updated."""
+        now = int(self.clock())
+        with Session(self.engine) as s:
+            q = select(User.cf_handle).where(User.banned == False)  # noqa: E712
+            if not force:
+                q = q.where(
+                    (User.rating_synced_at == None)  # noqa: E711
+                    | (User.rating_synced_at < now - RATING_MAX_AGE_SECONDS)
+                )
+            handles = list(s.exec(q).all())
+        infos: dict[str, dict] = {}
+        for i in range(0, len(handles), RATING_BATCH):
+            chunk = handles[i : i + RATING_BATCH]
+            try:
+                found = await self.cf.user_info(chunk)
+            except CodeforcesNotFound:
+                # One unknown handle fails the whole batch; fall back to one by one.
+                found = []
+                for h in chunk:
+                    try:
+                        found += await self.cf.user_info([h])
+                    except CodeforcesNotFound:
+                        log.warning("rating sync: Codeforces no longer knows handle %s", h)
+            for info in found:
+                infos[info["handle"].lower()] = info
+        with Session(self.engine) as s:
+            for u in s.exec(select(User).where(User.cf_handle.in_(handles))).all():  # type: ignore[attr-defined]
+                info = infos.get(u.cf_handle.lower())
+                if info is not None:
+                    u.cf_rating, u.cf_rank = info.get("rating"), info.get("rank")
+                u.rating_synced_at = now  # also for unknown handles, so they aren't retried every hour
+                s.add(u)
+            s.commit()
+        if infos:
+            log.info("synced ratings for %d members", len(infos))
+        return len(infos)
+
     async def tick(self) -> None:
         """Every minute: post today's task when due, close finished tasks."""
         for job in (self.post_daily_task, self.close_due_tasks):
@@ -258,10 +303,18 @@ class Jobs:
                 log.exception("job %s failed", job.__name__)
 
     async def safe_verify(self) -> None:
-        try:
-            await self.verify_attempts()
-        except Exception:
-            log.exception("verify_attempts failed")
+        await _safely(self.verify_attempts)
+
+    async def safe_sync_ratings(self) -> None:
+        await _safely(self.sync_ratings)
+
+
+async def _safely(job) -> None:
+    """Run a scheduled job, logging instead of raising so the scheduler lives on."""
+    try:
+        await job()
+    except Exception:
+        log.exception("job %s failed", job.__name__)
 
 
 def start_scheduler(jobs: Jobs):
@@ -274,5 +327,6 @@ def start_scheduler(jobs: Jobs):
     common = {"max_instances": 1, "coalesce": True, "next_run_time": datetime.now(timezone.utc)}
     sched.add_job(jobs.tick, "interval", seconds=60, id="tick", **common)
     sched.add_job(jobs.safe_verify, "interval", seconds=120, id="verify_attempts", **common)
+    sched.add_job(jobs.safe_sync_ratings, "interval", seconds=3600, id="sync_ratings", **common)
     sched.start()
     return sched

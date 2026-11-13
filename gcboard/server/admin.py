@@ -10,6 +10,7 @@ import asyncio
 import os
 import sys
 import time
+from datetime import datetime
 
 from pydantic import ValidationError
 from sqlmodel import Session, func, select
@@ -49,6 +50,9 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("validate-config", help="check config.toml and print the effective values")
     sub.add_parser("recompute", help="rebuild every score from stored raw data")
     sub.add_parser("users", help="list members")
+    sub.add_parser("sync-ratings", help="refresh every member's Codeforces rating now")
+    a = sub.add_parser("audit", help="show the audit log, newest first")
+    a.add_argument("--limit", type=int, default=50)
     r = sub.add_parser("reroll", help="replace today's task (only if nobody has started it)")
     r.add_argument("--reason", required=True)
     for name in ("ban", "unban", "revoke-tokens"):
@@ -78,6 +82,24 @@ def main(argv: list[str] | None = None) -> None:
             for u in s.exec(select(User).order_by(User.cf_handle)).all():
                 flags = " ".join(f for f, on in (("admin", u.is_admin), ("banned", u.banned)) if on)
                 print(f"{u.cf_handle:24} {u.cf_rating or '-':>6}  {flags}")
+        return
+
+    if args.cmd == "audit":
+        with Session(engine) as s:
+            rows = s.exec(
+                select(AuditLog, User.cf_handle)
+                .join(User, User.id == AuditLog.admin_id, isouter=True)
+                .order_by(AuditLog.at.desc(), AuditLog.id.desc())  # type: ignore[attr-defined]
+                .limit(args.limit)
+            ).all()
+            for entry, handle in rows:
+                when = datetime.fromtimestamp(entry.at, config.general.tz).strftime("%Y-%m-%d %H:%M")
+                print(f"{when}  {handle or '-':16} {entry.action:14} {entry.target:24} {entry.reason}")
+        return
+
+    if args.cmd == "sync-ratings":
+        n = asyncio.run(jobs.sync_ratings(force=True))
+        print(f"synced {n} members")
         return
 
     if args.cmd == "recompute":

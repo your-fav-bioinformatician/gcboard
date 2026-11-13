@@ -7,6 +7,7 @@ import sys
 import time
 import tomllib
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any
 
 import httpx
@@ -127,6 +128,9 @@ class Api:
 
     async def start_task(self) -> schemas.TodayResponse:
         return schemas.TodayResponse.model_validate(await self._request("POST", "/tasks/today/start"))
+
+    async def profile(self, handle: str) -> schemas.Profile:
+        return schemas.Profile.model_validate(await self._request("GET", f"/users/{quote(handle, safe='')}"))
 
     async def rules(self) -> schemas.RulesResponse:
         return schemas.RulesResponse.model_validate(await self._request("GET", "/rules"))

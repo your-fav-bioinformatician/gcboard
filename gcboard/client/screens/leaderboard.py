@@ -11,6 +11,8 @@ from textual.widgets import DataTable, Footer, Static
 
 from gcboard.client.api import ApiError
 
+from .profile import ProfileScreen
+
 REFRESH_SECONDS = 30
 
 
@@ -18,6 +20,7 @@ class LeaderboardScreen(Screen):
     BINDINGS = [
         Binding("w", "toggle_period", "week/all-time"),
         Binding("r", "refresh", "refresh"),
+        Binding("enter", "open_profile", "profile", show=True),
     ]
 
     def __init__(self) -> None:
@@ -49,6 +52,15 @@ class LeaderboardScreen(Screen):
 
     def action_refresh(self) -> None:
         self.load()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.row_key.value:
+            self.app.push_screen(ProfileScreen(event.row_key.value))
+
+    def action_open_profile(self) -> None:
+        table = self.query_one(DataTable)
+        if table.row_count:
+            self.app.push_screen(ProfileScreen(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value))
 
     @work(exclusive=True, group="load")
     async def load(self) -> None:
