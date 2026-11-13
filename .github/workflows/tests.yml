@@ -21,4 +21,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-extras --python ${{ matrix.python }}
-      - run: uv run --python ${{ matrix.python }} pytest -q
+      # Every scoring formula and grading rule stays fully tested (NFR-MAINT-1).
+      - run: >
+          uv run --python ${{ matrix.python }} pytest -q
+          --cov=gcboard.server.scoring --cov=gcboard.server.textrules --cov-branch
+          --cov-report=term-missing --cov-fail-under=100

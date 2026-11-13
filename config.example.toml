@@ -16,6 +16,9 @@ challenge_minutes = 5            # login challenge window
 post_retry_minutes = 5           # retry gap when Codeforces is down at post time
 post_retry_hours = 6             # give up on the day after this long
 github_token = ""                # read-only token for repo reads; GCBOARD_GITHUB_TOKEN env var overrides
+backup_dir = "backups"           # relative to the database file
+backup_keep = 14                 # newest daily backups kept
+backup_time = "03:00"            # daily, group time zone
 
 [tasks]
 rating_by_weekday = [800, 900, 1000, 1100, 1200, 1300, 1400]  # Mon..Sun

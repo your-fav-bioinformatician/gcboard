@@ -42,10 +42,25 @@ def text(app, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).render())
 
 
+# SRD 9.1: plain ASCII and box-drawing characters only, no emoji or icon fonts.
+# Also allowed: the middle dot used in the SRD's own leaderboard mockup, and the
+# block elements Textual draws scrollbars and tab underlines with.
+def allowed_glyph(ch: str) -> bool:
+    cp = ord(ch)
+    return cp < 0x80 or cp == 0xB7 or 0x2500 <= cp <= 0x259F
+
+
+def assert_glyphs(app) -> None:
+    bad = sorted({ch for ch in app.export_screenshot() if not allowed_glyph(ch)})
+    assert not bad, f"{type(app.screen).__name__} draws non-ASCII glyphs: {[f'U+{ord(c):04X}' for c in bad]}"
+
+
 async def settle(pilot) -> None:
+    """Wait for workers and redraws, then check the screen's glyphs."""
     for _ in range(3):
         await pilot.app.workers.wait_for_complete()
         await pilot.pause(0.05)
+    assert_glyphs(pilot.app)
 
 
 def test_login_today_and_board(server, cf, clock, tmp_path):
@@ -275,9 +290,12 @@ def test_writeup_lock_paste_relaunch_and_submit(server, cf, repos, clock, tmp_pa
             from textual.containers import VerticalScroll
 
             snippet = screen.query_one("#snippet", VerticalScroll)
-            await pilot.press("ctrl+down")
+            await pilot.press("ctrl+n")
             await settle(pilot)
             assert snippet.scroll_y == 3 or snippet.max_scroll_y < 3  # code scrolls without leaving the answer
+            await pilot.press("ctrl+p", "ctrl+down")
+            await settle(pilot)
+            assert snippet.scroll_y == 3 or snippet.max_scroll_y < 3
             assert a1.has_focus
 
             await pilot.press("tab")
@@ -320,3 +338,25 @@ def test_writeup_lock_paste_relaunch_and_submit(server, cf, repos, clock, tmp_pa
 
     asyncio.run(first_run())
     asyncio.run(relaunch_and_submit())
+
+
+def test_outdated_client_is_told_to_update(server):
+    from gcboard.client.app import GcboardApp
+
+    server.state.config.server.min_client_version = "99.0.0"
+
+    messages = []
+
+    async def scenario():
+        app = GcboardApp()
+        real_exit = app.exit
+        app.exit = lambda result=None, return_code=0, message=None: (  # noqa: E731
+            messages.append(message), real_exit(result, return_code, message))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause(0.1)
+        return app
+
+    app = asyncio.run(scenario())
+    assert app.return_code == 1  # exits before showing any screen
+    assert "too old" in messages[0] and "uv tool upgrade gcboard" in messages[0]

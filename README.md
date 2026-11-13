@@ -26,7 +26,7 @@ The full specification is in [docs/SRD.md](docs/SRD.md).
 | **M2 Profiles**: profiles, streaks, weekly wins, all-time board, rating sync, rules screen, admin CLI basics | done |
 | **M3 Projects**: schedule, repo registration and verification, snapshots, history factor, project screen | done |
 | **M4 Writeups**: identifiers, snippets, locked paste-free editor, rate-checked autosave, grading, project points and finalization | done |
-| M5 Hardening: backups, terminal compatibility pass | CI runs on Linux, macOS, Windows |
+| **M5 Hardening**: backups and restore, retries, client version check, terminal pass, full scoring suite | done, except the manual pass in the nine named terminals ([checklist](docs/terminal-checklist.md)) |
 
 ## For members: install the client
 
@@ -78,7 +78,7 @@ anything that fails with `COMPILATION_ERROR` within 5 minutes, then press `v`.
 | `e` / `v` | register / verify your project repo (Project) |
 | `r` | refresh |
 | `tab` / `shift+tab` | next / previous answer (Writeup) |
-| `ctrl+down` / `ctrl+up` | scroll the code snippet (Writeup) |
+| `ctrl+n` / `ctrl+p` | scroll the code snippet (Writeup; `ctrl+down` / `ctrl+up` also work outside macOS) |
 | `ctrl+s` | submit the writeup |
 | `q` | quit (not during a writeup) |
 
@@ -93,7 +93,9 @@ uv run gcboard-admin validate-config
 uv run gcboard-server --config config.toml --host 127.0.0.1 --port 8000
 ```
 
-Put it behind HTTPS, for example with Caddy:
+For a real deployment (systemd, HTTPS, backups, restore, upgrades), see
+[docs/operations.md](docs/operations.md). The short version: put it behind
+HTTPS, for example with Caddy:
 
 ```
 gcboard.example.org {
@@ -117,6 +119,7 @@ uv run gcboard-admin reroll --reason "duplicate of a contest problem"   # only i
 uv run gcboard-admin void-attempt HANDLE 2026-11-13 --reason "..."
 uv run gcboard-admin ban HANDLE --reason "..."     # also: unban, revoke-tokens
 uv run gcboard-admin recompute                     # rebuild every score from raw data
+uv run gcboard-admin backup                        # also: backups, restore FILE --yes (server stopped)
 uv run gcboard-admin sync-ratings                  # refresh Codeforces ratings now
 uv run gcboard-admin audit                         # show the audit log
 ```
@@ -130,9 +133,17 @@ uv sync --all-extras
 uv run pytest
 ```
 
-The tests cover every formula and worked example in SRD section 5, the Codeforces
-picker and verifier, the API and scheduled jobs against a fake Codeforces, and the
-Textual client driven end to end against a live server.
+The tests cover:
+
+- every formula and worked example in SRD section 5, plus invariants checked over
+  thousands of random inputs. CI requires 100% line and branch coverage of
+  `scoring.py` and `textrules.py`.
+- the API and scheduled jobs against fake Codeforces and GitHub.
+- the Textual client, driven end to end against a live server, with every
+  rendered screen checked for non-ASCII glyphs.
+- the real client process in pseudo-terminals at 80x24, under several `TERM`
+  values, 16, 256 and truecolor modes, and `NO_COLOR`.
+- backup and restore round trips.
 
 ### Layout
 
@@ -151,6 +162,7 @@ gcboard/
 │  ├─ jobs.py        scheduled jobs
 │  ├─ board.py       leaderboards, streaks, profiles
 │  ├─ timewin.py     day and week boundaries in the group time zone
+│  ├─ backup.py      online backups, checks, restore
 │  ├─ config.py      config.toml schema
 │  └─ admin.py       gcboard-admin CLI
 └─ shared/

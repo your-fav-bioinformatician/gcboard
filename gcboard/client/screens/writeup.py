@@ -54,7 +54,12 @@ class WriteupScreen(Screen):
         Binding("tab", "move(1)", "next answer", priority=True),
         Binding("shift+tab", "move(-1)", "previous answer", priority=True),
         Binding("ctrl+s", "submit", "submit writeup", priority=True),
-        Binding("ctrl+down", "scroll_snippet(3)", "scroll code", priority=True),
+        # ctrl+n / ctrl+p scroll the code; ctrl+down / ctrl+up also work where the OS
+        # doesn't take them (macOS uses them for Mission Control). Plain key labels:
+        # Textual would draw arrow glyphs, which SRD 9.1 rules out.
+        Binding("ctrl+n", "scroll_snippet(3)", "scroll code", priority=True, key_display="^n/^p"),
+        Binding("ctrl+p", "scroll_snippet(-3)", "scroll code up", priority=True, show=False),
+        Binding("ctrl+down", "scroll_snippet(3)", "scroll code", priority=True, show=False),
         Binding("ctrl+up", "scroll_snippet(-3)", "scroll code up", priority=True, show=False),
     ]
 

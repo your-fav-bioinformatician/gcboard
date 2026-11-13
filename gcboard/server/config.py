@@ -57,6 +57,20 @@ class ServerConfig(_Section):
     # Read-only GitHub token for repo reads. Prefer the GCBOARD_GITHUB_TOKEN
     # environment variable, which overrides this. Never sent to clients.
     github_token: str = ""
+    backup_dir: str = "backups"  # relative paths are relative to the database file
+    backup_keep: int = 14
+    backup_time: str = "03:00"  # daily, group time zone
+
+    @field_validator("backup_time")
+    @classmethod
+    def _check_backup_time(cls, v: str) -> str:
+        parse_hhmm(v)
+        return v
+
+    @property
+    def backup_path(self) -> Path:
+        p = Path(self.backup_dir)
+        return p if p.is_absolute() else Path(self.database).resolve().parent / p
 
 
 class TasksConfig(_Section):

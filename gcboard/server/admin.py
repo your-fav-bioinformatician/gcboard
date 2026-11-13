@@ -19,7 +19,7 @@ from sqlmodel import Session, func, select
 
 from .codeforces import CodeforcesClient
 from .config import Config, load_config
-from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, Writeup, make_engine
+from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, Writeup
 from .projects import overlapping
 from .writeups import WriteupService
 from .jobs import Jobs
@@ -82,6 +82,33 @@ def _fmt(epoch: int, config: Config) -> str:
     return datetime.fromtimestamp(epoch, config.general.tz).strftime("%Y-%m-%d %H:%M")
 
 
+def _backups(args: argparse.Namespace, config: Config) -> None:
+    from .backup import BackupError, backup_name, backup_to, check_backup, list_backups, restore
+
+    db, folder = Path(config.server.database), config.server.backup_path
+    if args.cmd == "backups":
+        files = list_backups(folder)
+        for f in files:
+            print(f"{f}  {f.stat().st_size // 1024} KB")
+        print(f"{len(files)} backups in {folder} (keeping {config.server.backup_keep})")
+    elif args.cmd == "backup":
+        day = datetime.now(config.general.tz).strftime("%Y-%m-%d")
+        target = backup_to(db, folder / backup_name(day))
+        check_backup(target)
+        print(f"backed up to {target}")
+    else:
+        if not args.yes:
+            sys.exit("restore replaces the live database. Stop the server, then run again with --yes.")
+        try:
+            kept = restore(Path(args.file), db)
+        except BackupError as exc:
+            sys.exit(f"not restored: {exc}")
+        print(f"restored {args.file} -> {db}\nprevious database kept as {kept}")
+        with Session(make_engine(str(db))) as s:
+            _audit(s, config, args.admin, "restore", str(args.file), "restore from backup")
+            s.commit()
+
+
 def _user(session: Session, handle: str) -> User:
     u = session.exec(select(User).where(func.lower(User.cf_handle) == handle.lower())).first()
     if u is None:
@@ -90,6 +117,26 @@ def _user(session: Session, handle: str) -> User:
 
 
 def main(argv: list[str] | None = None) -> None:
+    try:
+        _main(argv)
+    finally:
+        for engine in _ENGINES:
+            engine.dispose()
+        _ENGINES.clear()
+
+
+_ENGINES: list = []
+
+
+def make_engine(path: str):  # noqa: F811  (tracks engines so main() can close them)
+    from .db import make_engine as _make
+
+    engine = _make(path)
+    _ENGINES.append(engine)
+    return engine
+
+
+def _main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="gcboard-admin", description="gcboard server administration")
     p.add_argument("--config", default=os.environ.get("GCBOARD_CONFIG", "config.toml"))
     p.add_argument("--admin", help="admin handle for the audit log (default: first admin in config)")
@@ -99,6 +146,11 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("users", help="list members")
     sub.add_parser("sync-ratings", help="refresh every member's Codeforces rating now")
     sub.add_parser("projects", help="list projects")
+    sub.add_parser("backup", help="back up the database now (safe while the server runs)")
+    sub.add_parser("backups", help="list backups")
+    rs = sub.add_parser("restore", help="replace the database with a backup (stop the server first)")
+    rs.add_argument("file")
+    rs.add_argument("--yes", action="store_true", help="confirm: the server is stopped")
     pc = sub.add_parser("project-create", help="create a project from a TOML file")
     pc.add_argument("file")
     pe = sub.add_parser("project-edit", help="replace a project's definition from a TOML file")
@@ -133,6 +185,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "validate-config":
         print(config.model_dump_json(indent=2))
         print("config OK")
+        return
+
+    if args.cmd in ("backup", "backups", "restore"):
+        _backups(args, config)
         return
 
     engine = make_engine(config.server.database)

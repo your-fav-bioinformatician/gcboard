@@ -174,9 +174,33 @@ def _sqlite_pragmas(dbapi_conn, _record) -> None:
         cur.close()
 
 
+class SchemaError(Exception):
+    """The database was made by a different gcboard version."""
+
+
+def check_schema(engine: Engine) -> None:
+    """create_all adds missing tables but never missing columns. Refuse to run
+    on a database whose tables lack columns this version needs, instead of
+    failing later in confusing ways."""
+    problems = []
+    with engine.connect() as con:
+        for table in SQLModel.metadata.sorted_tables:
+            have = {row[1] for row in con.exec_driver_sql(f'PRAGMA table_info("{table.name}")')}
+            missing = [c.name for c in table.columns if c.name not in have]
+            if missing:
+                problems.append(f"{table.name}: {', '.join(missing)}")
+    if problems:
+        raise SchemaError(
+            "the database is missing columns this gcboard version needs ("
+            + "; ".join(problems)
+            + "). Restore a matching backup or migrate the database before starting."
+        )
+
+
 def make_engine(path: str) -> Engine:
     engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
+    check_schema(engine)
     return engine
 
 
@@ -188,6 +212,7 @@ __all__ = [
     "Project",
     "ProjectEntry",
     "RepoSnapshot",
+    "SchemaError",
     "Session",
     "TaskAttempt",
     "Token",

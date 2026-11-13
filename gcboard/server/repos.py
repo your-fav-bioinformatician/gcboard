@@ -8,6 +8,7 @@ snippet selection arrive with M4.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import re
@@ -29,6 +30,8 @@ SOURCE_EXTENSIONS = frozenset(
 EXCLUDED_PATH_PARTS = ("test", "vendor", "node_modules", "dist", "build", ".min.")
 MAX_SOURCE_BYTES = 200 * 1024
 VERIFY_FILE = ".gcboard"
+RETRIES = 3
+RETRY_DELAY = 1.0  # seconds; grows with each attempt
 
 _REPO_URL = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$"
@@ -139,10 +142,21 @@ class GitHubClient:
         self._http = http or httpx.AsyncClient(base_url=API, headers=headers, timeout=60, follow_redirects=True)
 
     async def _get(self, path: str, **kw) -> httpx.Response:
-        try:
-            r = await self._http.get(path, **kw)
-        except httpx.HTTPError as exc:
-            raise RepoError(f"GitHub unreachable: {exc!r}") from exc
+        """GET with up to RETRIES attempts on network errors and 5xx."""
+        for attempt in range(RETRIES):
+            if attempt:
+                await asyncio.sleep(RETRY_DELAY * attempt)
+            try:
+                r = await self._http.get(path, **kw)
+            except httpx.HTTPError as exc:
+                error = RepoError(f"GitHub unreachable: {exc!r}")
+                continue
+            if r.status_code >= 500:
+                error = RepoError(f"GitHub returned HTTP {r.status_code}")
+                continue
+            break
+        else:
+            raise error
         if r.status_code == 404:
             raise RepoUnavailable("repository not found, or it is private")
         if r.status_code == 409:
