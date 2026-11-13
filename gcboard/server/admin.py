@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlmodel import Session, func, select
 
 from .codeforces import CodeforcesClient
-from .config import Config, load_config
+from .config import Config, load_server_config
 from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, Writeup
 from .projects import overlapping
 from .writeups import WriteupService
@@ -183,8 +183,8 @@ def _main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
 
     try:
-        config = load_config(args.config)
-    except (OSError, ValidationError) as exc:
+        config = load_server_config(args.config)
+    except (OSError, ValueError) as exc:  # ValidationError is a ValueError
         sys.exit(f"invalid config {args.config}: {exc}")
     if args.cmd == "validate-config":
         print(config.model_dump_json(indent=2))

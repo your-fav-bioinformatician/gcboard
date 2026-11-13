@@ -93,8 +93,9 @@ uv run gcboard-admin validate-config
 uv run gcboard-server --config config.toml --host 127.0.0.1 --port 8000
 ```
 
-For a real deployment (systemd, HTTPS, backups, restore, upgrades), see
-[docs/operations.md](docs/operations.md). The short version: put it behind
+For a real deployment, see [docs/deploy-railway.md](docs/deploy-railway.md) for
+Railway (Dockerfile, volume, variables), or [docs/operations.md](docs/operations.md)
+for your own server (systemd, HTTPS, backups, restore, upgrades). The short version: put it behind
 HTTPS, for example with Caddy:
 
 ```

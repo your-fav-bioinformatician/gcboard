@@ -90,3 +90,34 @@ def test_github_tarball_download_and_size_cap():
     big = _tarball({"blob.bin": bytes(range(256)) * 8000})
     with pytest.raises(RepoUnavailable, match="larger than"):
         asyncio.run(github(lambda r: httpx.Response(200, content=big), max_bytes=1024).files_at(REF, "abc"))
+
+
+def test_config_from_file_or_variable(tmp_path):
+    from gcboard.server.config import load_server_config
+
+    toml = '[general]\ntimezone = "Asia/Baghdad"\n[server]\nadmins = ["boss"]\n'
+    env = {"GCBOARD_CONFIG_TOML": toml}
+    assert load_server_config(tmp_path / "missing.toml", env).general.timezone == "Asia/Baghdad"
+    (tmp_path / "config.toml").write_text('[general]\ntimezone = "UTC"\n')
+    assert load_server_config(tmp_path / "config.toml", env).general.timezone == "UTC"  # a file wins
+    with pytest.raises(ValueError, match="GCBOARD_CONFIG_TOML"):
+        load_server_config(tmp_path / "missing.toml", {})
+
+
+def test_railway_keeps_the_database_on_the_volume(tmp_path):
+    from gcboard.server.config import load_server_config
+
+    rail = {"RAILWAY_PROJECT_ID": "p1", "RAILWAY_VOLUME_MOUNT_PATH": str(tmp_path / "data")}
+    # No database set: it goes on the volume.
+    c = load_server_config(tmp_path / "x", {**rail, "GCBOARD_CONFIG_TOML": "[server]\n"})
+    assert c.server.database == str(tmp_path / "data" / "gcboard.db")
+    assert c.server.backup_path == (tmp_path / "data" / "backups").resolve()
+    # Explicitly elsewhere: refused, it would vanish on redeploy.
+    with pytest.raises(ValueError, match="not on the volume"):
+        load_server_config(tmp_path / "x", {**rail, "GCBOARD_CONFIG_TOML": '[server]\ndatabase = "/app/gcboard.db"\n'})
+    # On Railway without a volume: refused.
+    with pytest.raises(ValueError, match="attach a Railway volume"):
+        load_server_config(tmp_path / "x", {"RAILWAY_PROJECT_ID": "p1", "GCBOARD_CONFIG_TOML": "[server]\n"})
+    # Elsewhere nothing changes.
+    plain = load_server_config(tmp_path / "x", {"GCBOARD_CONFIG_TOML": "[server]\n"})
+    assert plain.server.database == "gcboard.db"
