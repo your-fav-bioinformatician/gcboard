@@ -6,26 +6,29 @@ This covers what can be automated. The named terminals in SRD 2.3 still need
 the manual pass in docs/terminal-checklist.md.
 """
 
-import fcntl
-import os
-import re
-import select
-import struct
-import subprocess
 import sys
-import termios
-import time
 
 import pytest
-from sqlmodel import Session
 
-from gcboard.server.db import Token, User
-from gcboard.server.main import hash_token
+if sys.platform == "win32":
+    pytest.skip("needs a POSIX pseudo-terminal", allow_module_level=True)
 
-from .test_client import server  # noqa: F401  (fixture)
+import fcntl  # noqa: E402  (POSIX only, so imported after the Windows skip)
+import os  # noqa: E402
+import pty  # noqa: E402
+import re  # noqa: E402
+import select  # noqa: E402
+import struct  # noqa: E402
+import subprocess  # noqa: E402
+import termios  # noqa: E402
+import time  # noqa: E402
 
-pty = pytest.importorskip("pty")
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX pseudo-terminal")
+from sqlmodel import Session  # noqa: E402
+
+from gcboard.server.db import Token, User  # noqa: E402
+from gcboard.server.main import hash_token  # noqa: E402
+
+from .test_client import server  # noqa: E402, F401  (fixture)
 
 ANSI = re.compile(r"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b[\]P_^][^\x1b\x07]*(?:\x07|\x1b\\)|\x1b[@-_]")
 TRUECOLOR = re.compile(r"\x1b\[[0-9;]*[34]8;2;")
