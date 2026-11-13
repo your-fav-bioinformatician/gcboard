@@ -1,0 +1,19 @@
+# Project definition for: gcboard-admin project-create examples/project.example.toml
+# Edit an existing one with: gcboard-admin project-edit ID FILE --reason "..."
+
+title = "Terminal tic-tac-toe"
+spec_file = "tictactoe.md"        # Markdown, relative to this file (or use spec_md = """...""")
+opens = "2026-11-16 00:00"        # group time zone; must not overlap another project
+# length_days = 14                # default: [projects] length_days in config.toml
+
+# Revealed only when a member's writeup starts (Q3).
+change_question = "How would you add an undo move to your game?"
+
+# Q3 scores 25 x (groups matched / total groups). A group matches if any of its
+# terms appears at the start of a word or as a phrase.
+change_keyword_groups = [
+  ["undo"],
+  ["stack", "history", "list of moves", "previous move"],
+  ["pop", "remove", "revert", "restore"],
+  ["board", "grid"],
+]

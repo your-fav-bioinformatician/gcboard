@@ -13,6 +13,7 @@ import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
@@ -33,6 +34,9 @@ from .codeforces import (
 from .config import Config
 from .db import DailyTask, TaskAttempt, User
 from .timewin import current_window
+
+if TYPE_CHECKING:
+    from .projects import ProjectService
 
 log = logging.getLogger(__name__)
 
@@ -60,12 +64,14 @@ class Jobs:
         cf: CodeforcesAPI,
         clock: Callable[[], float] = time.time,
         rng: random.Random | None = None,
+        projects: ProjectService | None = None,
     ) -> None:
         self.engine = engine
         self.config = config
         self.cf = cf
         self.clock = clock
         self.rng = rng or random.SystemRandom()
+        self.projects = projects
         self._post_lock = asyncio.Lock()
         self._verify_lock = asyncio.Lock()
         self._first_post_failure: dict[str, float] = {}
@@ -295,8 +301,12 @@ class Jobs:
         return len(infos)
 
     async def tick(self) -> None:
-        """Every minute: post today's task when due, close finished tasks."""
-        for job in (self.post_daily_task, self.close_due_tasks):
+        """Every minute: post today's task when due, close finished tasks, and
+        take the day's repo snapshots once snapshot_time has passed."""
+        jobs = [self.post_daily_task, self.close_due_tasks]
+        if self.projects is not None:
+            jobs.append(self.projects.daily_snapshots)
+        for job in jobs:
             try:
                 await job()
             except Exception:  # keep the scheduler alive; the next tick retries

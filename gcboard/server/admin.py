@@ -10,14 +10,17 @@ import asyncio
 import os
 import sys
 import time
-from datetime import datetime
+import tomllib
+from datetime import datetime, timedelta
+from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlmodel import Session, func, select
 
 from .codeforces import CodeforcesClient
 from .config import Config, load_config
-from .db import AuditLog, DailyTask, TaskAttempt, Token, User, make_engine
+from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, make_engine
+from .projects import overlapping
 from .jobs import Jobs
 from .timewin import current_window
 
@@ -33,6 +36,49 @@ def _audit(session: Session, config: Config, admin: str | None, action: str, tar
         AuditLog(at=int(time.time()), admin_id=admin_user.id if admin_user else None,
                  action=action, target=target, reason=reason)
     )
+
+
+class ProjectFile(BaseModel):
+    """A project definition file for project-create / project-edit (FR-PROJ-1)."""
+
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=120)
+    spec_md: str | None = None  # inline Markdown, or:
+    spec_file: str | None = None  # Markdown file, relative to the project file
+    opens: str  # "YYYY-MM-DD HH:MM" in the group time zone
+    length_days: int | None = Field(default=None, ge=1, le=60)
+    change_question: str = Field(min_length=10)
+    change_keyword_groups: list[list[str]] = Field(min_length=1)
+
+    @field_validator("change_keyword_groups")
+    @classmethod
+    def _groups(cls, v: list[list[str]]) -> list[list[str]]:
+        if any(not g or any(not t.strip() for t in g) for g in v):
+            raise ValueError("every keyword group needs at least one non-empty term")
+        return [[t.strip().lower() for t in g] for g in v]
+
+
+def load_project_file(path: str, config: Config) -> tuple[ProjectFile, str, int, int]:
+    """Returns (definition, spec markdown, opens_at, closes_at)."""
+    file = Path(path)
+    try:
+        pf = ProjectFile.model_validate(tomllib.loads(file.read_text(encoding="utf-8")))
+    except (OSError, tomllib.TOMLDecodeError, ValidationError) as exc:
+        sys.exit(f"invalid project file {path}: {exc}")
+    if (pf.spec_md is None) == (pf.spec_file is None):
+        sys.exit("give exactly one of spec_md or spec_file")
+    spec = pf.spec_md if pf.spec_md is not None else (file.parent / pf.spec_file).read_text(encoding="utf-8")
+    try:
+        opens_local = datetime.strptime(pf.opens, "%Y-%m-%d %H:%M").replace(tzinfo=config.general.tz)
+    except ValueError:
+        sys.exit(f"opens must look like 2026-11-16 00:00 (got {pf.opens!r})")
+    days = pf.length_days or config.projects.length_days
+    closes_local = (opens_local.replace(tzinfo=None) + timedelta(days=days)).replace(tzinfo=config.general.tz)
+    return pf, spec, int(opens_local.timestamp()), int(closes_local.timestamp())
+
+
+def _fmt(epoch: int, config: Config) -> str:
+    return datetime.fromtimestamp(epoch, config.general.tz).strftime("%Y-%m-%d %H:%M")
 
 
 def _user(session: Session, handle: str) -> User:
@@ -51,6 +97,17 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("recompute", help="rebuild every score from stored raw data")
     sub.add_parser("users", help="list members")
     sub.add_parser("sync-ratings", help="refresh every member's Codeforces rating now")
+    sub.add_parser("projects", help="list projects")
+    pc = sub.add_parser("project-create", help="create a project from a TOML file")
+    pc.add_argument("file")
+    pe = sub.add_parser("project-edit", help="replace a project's definition from a TOML file")
+    pe.add_argument("project_id", type=int)
+    pe.add_argument("file")
+    pe.add_argument("--reason", required=True)
+    ve = sub.add_parser("void-entry", help="void a member's project entry")
+    ve.add_argument("handle")
+    ve.add_argument("project_id", type=int)
+    ve.add_argument("--reason", required=True)
     a = sub.add_parser("audit", help="show the audit log, newest first")
     a.add_argument("--limit", type=int, default=50)
     r = sub.add_parser("reroll", help="replace today's task (only if nobody has started it)")
@@ -97,6 +154,40 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"{when}  {handle or '-':16} {entry.action:14} {entry.target:24} {entry.reason}")
         return
 
+    if args.cmd == "projects":
+        now = time.time()
+        with Session(engine) as s:
+            for p in s.exec(select(Project).order_by(Project.opens_at)).all():
+                state = "open" if p.opens_at <= now < p.closes_at else ("upcoming" if now < p.opens_at else "closed")
+                n = len(s.exec(select(ProjectEntry.id).where(ProjectEntry.project_id == p.id)).all())
+                print(f"{p.id:>3}  {_fmt(p.opens_at, config)} -> {_fmt(p.closes_at, config)}  {state:8} {n:>3} entries  {p.title}")
+        return
+
+    if args.cmd in ("project-create", "project-edit"):
+        pf, spec, opens_at, closes_at = load_project_file(args.file, config)
+        with Session(engine) as s:
+            ignore = args.project_id if args.cmd == "project-edit" else None
+            if clash := overlapping(s, opens_at, closes_at, ignore_id=ignore):
+                sys.exit(f"overlaps project {clash.id} ({clash.title}); only one project may be open at a time")
+            if args.cmd == "project-edit":
+                p = s.get(Project, args.project_id)
+                if p is None:
+                    sys.exit(f"no project {args.project_id}")
+                if p.closes_at <= time.time():
+                    sys.exit("cannot edit a project that has closed")
+                reason = args.reason
+            else:
+                p = Project(title="", spec_md="", opens_at=0, closes_at=0, change_question="")
+                reason = "created"
+            p.title, p.spec_md, p.opens_at, p.closes_at = pf.title, spec, opens_at, closes_at
+            p.change_question, p.change_keyword_groups = pf.change_question, pf.change_keyword_groups
+            s.add(p)
+            s.flush()
+            _audit(s, config, args.admin, args.cmd, f"project {p.id}", reason)
+            s.commit()
+            print(f"project {p.id}: {p.title}  {_fmt(opens_at, config)} -> {_fmt(closes_at, config)}")
+        return
+
     if args.cmd == "sync-ratings":
         n = asyncio.run(jobs.sync_ratings(force=True))
         print(f"synced {n} members")
@@ -138,6 +229,14 @@ def main(argv: list[str] | None = None) -> None:
             for t in s.exec(select(Token).where(Token.user_id == u.id, Token.revoked_at == None)).all():  # noqa: E711
                 t.revoked_at = int(time.time())
                 s.add(t)
+        elif args.cmd == "void-entry":
+            e = s.exec(
+                select(ProjectEntry).where(ProjectEntry.project_id == args.project_id, ProjectEntry.user_id == u.id)
+            ).first()
+            if e is None:
+                sys.exit(f"{u.cf_handle} has no entry in project {args.project_id}")
+            e.status, e.void_reason = EntryStatus.VOID, args.reason
+            s.add(e)
         elif args.cmd == "void-attempt":
             task = s.exec(select(DailyTask).where(DailyTask.task_date == args.task_date)).first()
             a = task and s.exec(

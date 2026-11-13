@@ -1,12 +1,12 @@
 """Database tables (SRD section 6). SQLite in WAL mode via SQLModel.
 
-Timestamps are integer Unix epoch seconds (UTC) throughout. Tables for
-projects, entries, snapshots, and writeups arrive with milestones M3 and M4.
+Timestamps are integer Unix epoch seconds (UTC) throughout. The writeups
+table arrives with milestone M4.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import UniqueConstraint, event
+from sqlalchemy import JSON, Column, UniqueConstraint, event
 from sqlalchemy.engine import Engine
 from sqlmodel import Field, Session, SQLModel, create_engine
 
@@ -74,6 +74,63 @@ class TaskAttempt(SQLModel, table=True):
     void_reason: str | None = None
 
 
+class Project(SQLModel, table=True):
+    __tablename__ = "projects"
+    id: int | None = Field(default=None, primary_key=True)
+    title: str
+    spec_md: str
+    opens_at: int = Field(index=True)
+    closes_at: int = Field(index=True)
+    change_question: str
+    change_keyword_groups: list[list[str]] = Field(default_factory=list, sa_column=Column(JSON))
+    finalized_at: int | None = None
+
+
+class EntryStatus:
+    PENDING = "pending"  # registered, .gcboard not verified yet
+    REGISTERED = "registered"  # verified; snapshots running
+    UNREACHABLE = "unreachable"  # last snapshot failed (repo private or deleted)
+    SUBMITTED = "submitted"  # frozen; writeup comes next (M4)
+    VOID = "void"  # voided by the admin
+
+
+class ProjectEntry(SQLModel, table=True):
+    """A member's participation in one project.
+
+    repo_url is not a database-level UNIQUE as in SRD section 6: an unverified
+    registration must not lock a repo away from its real owner. The server
+    instead refuses any URL already on a verified entry, in any project.
+    """
+
+    __tablename__ = "project_entries"
+    __table_args__ = (UniqueConstraint("project_id", "user_id"),)
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="projects.id", index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    repo_url: str = Field(index=True)  # normalized https://github.com/owner/repo, lowercase
+    verify_code: str
+    registered_at: int
+    verified_at: int | None = None
+    submitted_at: int | None = None
+    frozen_sha: str | None = None
+    history_factor: float | None = None
+    submit_rank: int | None = None
+    speed_points: float | None = None
+    points: int = 0
+    status: str = EntryStatus.PENDING
+    void_reason: str | None = None
+
+
+class RepoSnapshot(SQLModel, table=True):
+    __tablename__ = "repo_snapshots"
+    id: int | None = Field(default=None, primary_key=True)
+    entry_id: int = Field(foreign_key="project_entries.id", index=True)
+    taken_at: int
+    kind: str  # registration | daily | submission
+    head_sha: str
+    source_loc: int
+
+
 class AuditLog(SQLModel, table=True):
     __tablename__ = "audit_log"
     id: int | None = Field(default=None, primary_key=True)
@@ -104,6 +161,10 @@ __all__ = [
     "AuditLog",
     "AuthChallenge",
     "DailyTask",
+    "EntryStatus",
+    "Project",
+    "ProjectEntry",
+    "RepoSnapshot",
     "Session",
     "TaskAttempt",
     "Token",

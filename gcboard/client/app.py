@@ -15,6 +15,7 @@ from .screens.common import MIN_HEIGHT, MIN_WIDTH, TooSmallScreen
 from .screens.leaderboard import LeaderboardScreen
 from .screens.login import LoginScreen
 from .screens.profile import ProfileScreen
+from .screens.project import ProjectScreen
 from .screens.rules import RulesScreen
 from .screens.today import TodayScreen
 
@@ -39,7 +40,9 @@ Screen { padding: 0 1; }
 #status { height: auto; margin-top: 1; }
 #board { height: 1fr; }
 #handle { width: 40; margin-bottom: 1; }
-#today, #challenge, #rules, #profile { height: auto; }
+#today, #challenge, #rules, #profile, #project-info { height: auto; }
+#repo-url { width: 70; margin: 1 0; }
+#project-spec { margin-top: 1; }
 ConfirmScreen, TooSmallScreen { align: center middle; }
 #dialog { width: 60; height: auto; border: round $accent; padding: 1 2; background: $panel; }
 #dialog-keys { margin-top: 1; color: $text-muted; }
@@ -54,12 +57,14 @@ class GcboardApp(App):
         "login": LoginScreen,
         "board": LeaderboardScreen,
         "today": TodayScreen,
+        "project": ProjectScreen,
         "me": ProfileScreen,
         "rules": RulesScreen,
     }
     BINDINGS = [
         Binding("l", "goto('board')", "board"),
         Binding("t", "goto('today')", "today"),
+        Binding("p", "goto('project')", "project"),
         Binding("m", "goto('me')", "me"),
         Binding("question_mark", "goto('rules')", "rules"),
         Binding("q", "quit", "quit"),

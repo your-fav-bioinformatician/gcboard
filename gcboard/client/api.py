@@ -132,6 +132,22 @@ class Api:
     async def profile(self, handle: str) -> schemas.Profile:
         return schemas.Profile.model_validate(await self._request("GET", f"/users/{quote(handle, safe='')}"))
 
+    async def current_project(self) -> schemas.ProjectResponse:
+        return schemas.ProjectResponse.model_validate(await self._request("GET", "/projects/current"))
+
+    async def register_repo(self, project_id: int, repo_url: str) -> schemas.ProjectResponse:
+        return schemas.ProjectResponse.model_validate(
+            await self._request("POST", f"/projects/{project_id}/register", json={"repo_url": repo_url})
+        )
+
+    async def verify_repo(self, project_id: int) -> schemas.ProjectResponse:
+        return schemas.ProjectResponse.model_validate(
+            await self._request("POST", f"/projects/{project_id}/register/verify")
+        )
+
+    async def submit_project(self, project_id: int) -> schemas.ProjectResponse:
+        return schemas.ProjectResponse.model_validate(await self._request("POST", f"/projects/{project_id}/submit"))
+
     async def rules(self) -> schemas.RulesResponse:
         return schemas.RulesResponse.model_validate(await self._request("GET", "/rules"))
 

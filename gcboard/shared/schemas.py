@@ -134,3 +134,51 @@ class RulesResponse(BaseModel):
     projects: dict[str, Any]
     writeup: dict[str, Any]
     history: dict[str, Any]
+
+
+class RegisterRequest(BaseModel):
+    repo_url: str = Field(min_length=10, max_length=200)
+
+
+class SnapshotInfo(BaseModel):
+    taken_at: int
+    kind: Literal["registration", "daily", "submission"]
+    head_sha: str
+    source_loc: int
+
+
+class EntryInfo(BaseModel):
+    repo_url: str
+    status: Literal["pending", "registered", "unreachable", "submitted", "void"]
+    verify_code: str | None  # only while the .gcboard file is not verified yet
+    registered_at: int
+    verified_at: int | None
+    submitted_at: int | None
+    frozen_sha: str | None
+    history_factor: float | None  # final once submitted; otherwise "if you submitted now"
+    snapshots: list[SnapshotInfo]
+
+
+class ProjectInfo(BaseModel):
+    """The change question is not included: it is revealed in the writeup (FR-WRITE-1)."""
+
+    id: int
+    title: str
+    spec_md: str
+    opens_at: int
+    closes_at: int
+
+
+class UpcomingProject(BaseModel):
+    id: int
+    title: str
+    opens_at: int
+    closes_at: int
+
+
+class ProjectResponse(BaseModel):
+    server_time: float
+    project: ProjectInfo | None
+    upcoming: UpcomingProject | None
+    entry: EntryInfo | None
+    max_registration_loc: int

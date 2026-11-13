@@ -15,6 +15,7 @@ codeforces_min_interval = 2.0    # seconds between Codeforces API calls
 challenge_minutes = 5            # login challenge window
 post_retry_minutes = 5           # retry gap when Codeforces is down at post time
 post_retry_hours = 6             # give up on the day after this long
+github_token = ""                # read-only token for repo reads; GCBOARD_GITHUB_TOKEN env var overrides
 
 [tasks]
 rating_by_weekday = [800, 900, 1000, 1100, 1200, 1300, 1400]  # Mon..Sun
@@ -31,6 +32,8 @@ min_task_points = 10
 [projects]
 length_days = 14
 max_registration_loc = 50
+snapshot_time = "12:00"          # daily repo snapshots, group time zone
+max_repo_mb = 50                 # largest repo download the server accepts
 speed_max = 300
 speed_decay = 0.85
 speed_min = 90

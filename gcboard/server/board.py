@@ -10,11 +10,11 @@ from typing import Literal
 
 from sqlmodel import Session, select
 
-from gcboard.shared.schemas import BoardRow, LeaderboardResponse, Profile
+from gcboard.shared.schemas import BoardRow, LeaderboardResponse, Profile, ProjectHistoryRow
 
 from . import scoring
 from .config import Config
-from .db import DailyTask, TaskAttempt, User
+from .db import DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, User
 from .timewin import week_of
 
 
@@ -125,7 +125,7 @@ def weekly_finishes(data: _Data, current_monday: date) -> dict[int, list[int]]:
 
 
 def profile(session: Session, config: Config, user: User, now: float) -> Profile:
-    """FR-PROF-1. Project history arrives with M3/M4."""
+    """FR-PROF-1. Project rank, writeup score and points are filled in by M4."""
     data = _load(session)
     week = week_of(now, config.general.tz)
     mine = [a for a in data.solved if a.user_id == user.id]
@@ -146,5 +146,25 @@ def profile(session: Session, config: Config, user: User, now: float) -> Profile
         fastest_solve_seconds=min(times) if times else None,
         weekly_wins=sum(1 for r in finishes if r == 1),
         best_weekly_finish=min(finishes) if finishes else None,
-        projects=[],
+        projects=_project_history(session, user),
     )
+
+
+def _project_history(session: Session, user: User) -> list[ProjectHistoryRow]:
+    rows = session.exec(
+        select(ProjectEntry, Project)
+        .join(Project, Project.id == ProjectEntry.project_id)
+        .where(ProjectEntry.user_id == user.id, ProjectEntry.status == EntryStatus.SUBMITTED)
+        .order_by(Project.opens_at)
+    ).all()
+    return [
+        ProjectHistoryRow(
+            title=p.title,
+            submit_rank=e.submit_rank,
+            writeup_score=None,  # M4
+            history_factor=e.history_factor,
+            points=e.points,
+            provisional=p.finalized_at is None,
+        )
+        for e, p in rows
+    ]

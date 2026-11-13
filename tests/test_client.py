@@ -21,8 +21,8 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def server(config, cf, clock, rng, tmp_path, monkeypatch):
-    app = create_app(config, cf=cf, clock=clock, run_scheduler=False)
+def server(config, cf, repos, clock, rng, tmp_path, monkeypatch):
+    app = create_app(config, cf=cf, repos=repos, clock=clock, run_scheduler=False)
     app.state.jobs.rng = rng
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
@@ -138,5 +138,64 @@ def test_small_terminal_notice(server):
             await pilot.resize_terminal(90, 30)
             await settle(pilot)
             assert not isinstance(app.screen, TooSmallScreen)
+
+    asyncio.run(scenario())
+
+
+def test_project_register_verify_submit(server, cf, repos, clock, tmp_path):
+    from sqlmodel import Session
+
+    from gcboard.client.app import GcboardApp
+    from gcboard.client.screens.common import ConfirmScreen
+    from gcboard.server.db import Project
+
+    with Session(server.state.engine) as s:
+        s.add(Project(title="Terminal tic-tac-toe", spec_md="# Tic-tac-toe\n\nBuild **it**.",
+                      opens_at=int(clock()) - 3600, closes_at=int(clock()) + 14 * 86400,
+                      change_question="How would you add undo?", change_keyword_groups=[["undo"]]))
+        s.commit()
+    repo = "https://github.com/noor/ttt"
+    repos.push(repo, {"README.md": "new"})
+
+    async def scenario():
+        cf.add_user("noor")
+        app = GcboardApp()
+        async with app.run_test(size=(100, 30)) as pilot:
+            await settle(pilot)
+            await pilot.press(*"noor", "enter")
+            await settle(pilot)
+            ch = app.screen.challenge
+            cf.submit("noor", ch.contest_id, ch.index, int(clock()) + 5, "COMPILATION_ERROR")
+            await pilot.press("v")
+            await settle(pilot)
+
+            await pilot.press("p")
+            await settle(pilot)
+            assert app.current_mode == "project"
+            assert "project Terminal tic-tac-toe" in text(app, "#project-title")
+            assert "not registered" in text(app, "#project-info")
+            assert "undo" not in text(app, "#project-info")
+
+            await pilot.press("e")
+            await settle(pilot)
+            await pilot.press(*"github.com/noor/ttt", "enter")
+            await settle(pilot)
+            info = text(app, "#project-info")
+            assert "waiting for verification" in info
+            code = next(w for w in info.split() if w.startswith("gcboard-"))
+
+            repos.push(repo, {".gcboard": code, "game.py": "print(1)\n"})
+            await pilot.press("v")
+            await settle(pilot)
+            assert "verified" in text(app, "#project-info") and "registration" in text(app, "#project-info")
+
+            await pilot.press("s")
+            await settle(pilot)
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("y")
+            await settle(pilot)
+            info = text(app, "#project-info")
+            assert "submitted" in info and "history" in info
+            app.save_screenshot(str(tmp_path / "project.svg"))
 
     asyncio.run(scenario())
