@@ -64,9 +64,17 @@ class ConfirmScreen(ModalScreen[bool]):
 class TooSmallScreen(ModalScreen[None]):
     """Shown while the terminal is below 80x24 (NFR-COMPAT-1)."""
 
+    # Modal screens block the app's own bindings, so quitting needs its own key.
+    BINDINGS = [Binding("q", "quit_app", "quit")]
+
+    def action_quit_app(self) -> None:
+        if getattr(self.app, "writeup", None) is None:  # never during a writeup (FR-WRITE-3)
+            self.app.exit()
+
     def compose(self) -> ComposeResult:
         yield Static(
-            f"Please enlarge your terminal to at least {MIN_WIDTH}x{MIN_HEIGHT}.", id="too-small"
+            f"Please enlarge your terminal to at least {MIN_WIDTH}x{MIN_HEIGHT}.\n\nPress q to quit.",
+            id="too-small",
         )
 
 

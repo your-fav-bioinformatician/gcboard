@@ -36,6 +36,7 @@ from .db import DailyTask, TaskAttempt, User
 from .timewin import current_window
 
 if TYPE_CHECKING:
+    from .backup import BackupJob
     from .projects import ProjectService
 
 log = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class Jobs:
         clock: Callable[[], float] = time.time,
         rng: random.Random | None = None,
         projects: ProjectService | None = None,
+        backup: BackupJob | None = None,
     ) -> None:
         self.engine = engine
         self.config = config
@@ -72,6 +74,7 @@ class Jobs:
         self.clock = clock
         self.rng = rng or random.SystemRandom()
         self.projects = projects
+        self.backup = backup
         self._post_lock = asyncio.Lock()
         self._verify_lock = asyncio.Lock()
         self._first_post_failure: dict[str, float] = {}
@@ -301,16 +304,24 @@ class Jobs:
         return len(infos)
 
     async def tick(self) -> None:
-        """Every minute: post today's task when due, close finished tasks, and
-        take the day's repo snapshots once snapshot_time has passed."""
+        """Every minute: post today's task when due, close finished tasks,
+        take the day's repo snapshots once snapshot_time has passed,
+        auto-submit expired writeups, finalize finished projects, and back up
+        the database once a day."""
         jobs = [self.post_daily_task, self.close_due_tasks]
         if self.projects is not None:
-            jobs.append(self.projects.daily_snapshots)
+            jobs += [
+                self.projects.daily_snapshots,
+                self.projects.writeups.sweep,  # sweep_writeups (section 8)
+                self.projects.writeups.finalize_projects,  # finalize_project
+            ]
+        if self.backup is not None:
+            jobs.append(self.backup.run)  # backup_db
         for job in jobs:
             try:
                 await job()
             except Exception:  # keep the scheduler alive; the next tick retries
-                log.exception("job %s failed", job.__name__)
+                log.exception("job %s failed", getattr(job, "__qualname__", job))
 
     async def safe_verify(self) -> None:
         await _safely(self.verify_attempts)

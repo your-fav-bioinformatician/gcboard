@@ -19,8 +19,9 @@ from sqlmodel import Session, func, select
 
 from .codeforces import CodeforcesClient
 from .config import Config, load_config
-from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, make_engine
+from .db import AuditLog, DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, Token, User, Writeup
 from .projects import overlapping
+from .writeups import WriteupService
 from .jobs import Jobs
 from .timewin import current_window
 
@@ -81,6 +82,33 @@ def _fmt(epoch: int, config: Config) -> str:
     return datetime.fromtimestamp(epoch, config.general.tz).strftime("%Y-%m-%d %H:%M")
 
 
+def _backups(args: argparse.Namespace, config: Config) -> None:
+    from .backup import BackupError, backup_name, backup_to, check_backup, list_backups, restore
+
+    db, folder = Path(config.server.database), config.server.backup_path
+    if args.cmd == "backups":
+        files = list_backups(folder)
+        for f in files:
+            print(f"{f}  {f.stat().st_size // 1024} KB")
+        print(f"{len(files)} backups in {folder} (keeping {config.server.backup_keep})")
+    elif args.cmd == "backup":
+        day = datetime.now(config.general.tz).strftime("%Y-%m-%d")
+        target = backup_to(db, folder / backup_name(day))
+        check_backup(target)
+        print(f"backed up to {target}")
+    else:
+        if not args.yes:
+            sys.exit("restore replaces the live database. Stop the server, then run again with --yes.")
+        try:
+            kept = restore(Path(args.file), db)
+        except BackupError as exc:
+            sys.exit(f"not restored: {exc}")
+        print(f"restored {args.file} -> {db}\nprevious database kept as {kept}")
+        with Session(make_engine(str(db))) as s:
+            _audit(s, config, args.admin, "restore", str(args.file), "restore from backup")
+            s.commit()
+
+
 def _user(session: Session, handle: str) -> User:
     u = session.exec(select(User).where(func.lower(User.cf_handle) == handle.lower())).first()
     if u is None:
@@ -89,6 +117,26 @@ def _user(session: Session, handle: str) -> User:
 
 
 def main(argv: list[str] | None = None) -> None:
+    try:
+        _main(argv)
+    finally:
+        for engine in _ENGINES:
+            engine.dispose()
+        _ENGINES.clear()
+
+
+_ENGINES: list = []
+
+
+def make_engine(path: str):  # noqa: F811  (tracks engines so main() can close them)
+    from .db import make_engine as _make
+
+    engine = _make(path)
+    _ENGINES.append(engine)
+    return engine
+
+
+def _main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="gcboard-admin", description="gcboard server administration")
     p.add_argument("--config", default=os.environ.get("GCBOARD_CONFIG", "config.toml"))
     p.add_argument("--admin", help="admin handle for the audit log (default: first admin in config)")
@@ -98,12 +146,20 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("users", help="list members")
     sub.add_parser("sync-ratings", help="refresh every member's Codeforces rating now")
     sub.add_parser("projects", help="list projects")
+    sub.add_parser("backup", help="back up the database now (safe while the server runs)")
+    sub.add_parser("backups", help="list backups")
+    rs = sub.add_parser("restore", help="replace the database with a backup (stop the server first)")
+    rs.add_argument("file")
+    rs.add_argument("--yes", action="store_true", help="confirm: the server is stopped")
     pc = sub.add_parser("project-create", help="create a project from a TOML file")
     pc.add_argument("file")
     pe = sub.add_parser("project-edit", help="replace a project's definition from a TOML file")
     pe.add_argument("project_id", type=int)
     pe.add_argument("file")
     pe.add_argument("--reason", required=True)
+    wv = sub.add_parser("writeup", help="show a member's writeup answers and score (admin only, FR-PROF-3)")
+    wv.add_argument("handle")
+    wv.add_argument("project_id", type=int)
     ve = sub.add_parser("void-entry", help="void a member's project entry")
     ve.add_argument("handle")
     ve.add_argument("project_id", type=int)
@@ -129,6 +185,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "validate-config":
         print(config.model_dump_json(indent=2))
         print("config OK")
+        return
+
+    if args.cmd in ("backup", "backups", "restore"):
+        _backups(args, config)
         return
 
     engine = make_engine(config.server.database)
@@ -193,8 +253,37 @@ def main(argv: list[str] | None = None) -> None:
         print(f"synced {n} members")
         return
 
+    writeups = WriteupService(engine, config)
+
+    if args.cmd == "writeup":
+        with Session(engine) as s:
+            u = _user(s, args.handle)
+            row = s.exec(
+                select(Writeup)
+                .join(ProjectEntry, ProjectEntry.id == Writeup.entry_id)
+                .where(ProjectEntry.user_id == u.id, ProjectEntry.project_id == args.project_id)
+            ).first()
+            if row is None:
+                sys.exit(f"{u.cf_handle} has no writeup for project {args.project_id}")
+            state = "open" if row.submitted_at is None else ("auto-submitted" if row.auto_submitted else "submitted")
+            print(f"{u.cf_handle} - project {args.project_id} - {state} - score {row.score}")
+            print(f"snippet: {row.snippet_path} lines {row.snippet_start}-{row.snippet_end}")
+            for i, (q, a) in enumerate(zip(row.questions, row.answers), 1):
+                print(f"\nQ{i}. {q}\n{'-' * 60}\n{a or '(empty)'}")
+            if row.breakdown:
+                b = row.breakdown
+                print("\n" + "  ".join(f"{k} {b[k]}" for k in (
+                    "completeness", "grounding", "change_relevance", "variety", "identifier_density", "sentences")))
+                if not b.get("gate_passed", True):
+                    print(f"gate failed: {b.get('gate_reason')}")
+            _audit(s, config, args.admin, "view-writeup", f"{u.cf_handle} project {args.project_id}", "viewed")
+            s.commit()
+        return
+
     if args.cmd == "recompute":
         n = jobs.recompute_all()
+        w = writeups.regrade_all()
+        print(f"regraded {w} writeups and rescored every project")
         with Session(engine) as s:
             _audit(s, config, args.admin, "recompute", "all", "manual recompute")
             s.commit()
@@ -248,8 +337,9 @@ def main(argv: list[str] | None = None) -> None:
             s.add(a)
         _audit(s, config, args.admin, args.cmd, u.cf_handle, args.reason)
         s.commit()
-    if args.cmd in ("ban", "unban", "void-attempt"):
+    if args.cmd in ("ban", "unban", "void-attempt", "void-entry"):
         jobs.recompute_all()  # banned and voided attempts no longer push others down
+        writeups.regrade_all()  # ...nor banned members and voided entries in projects
     print(f"{args.cmd} {args.handle}: done")
 
 

@@ -31,8 +31,12 @@ from gcboard.shared.schemas import (
     Me,
     ProblemInfo,
     Profile,
+    DraftRequest,
     ProjectResponse,
     RegisterRequest,
+    SubmitWriteupRequest,
+    WriteupResult,
+    WriteupSession,
     RulesResponse,
     TimeResponse,
     TodayResponse,
@@ -44,9 +48,12 @@ from . import board
 from .codeforces import CodeforcesAPI, CodeforcesClient, CodeforcesError, CodeforcesNotFound, problem_key, problem_url, submission_key
 from .config import Config, load_config
 from .errors import ApiError
+from .db import SchemaError
 from .db import AuthChallenge, DailyTask, TaskAttempt, Token, User, make_engine
 from .jobs import Jobs, start_scheduler
 from .projects import ProjectService
+from .writeups import WriteupService
+from .backup import BackupJob
 from .repos import GitHubClient, RepoHost
 
 log = logging.getLogger("gcboard")
@@ -56,14 +63,23 @@ log = logging.getLogger("gcboard")
 VERIFY_GRACE_SECONDS = 600
 
 
+# Largest request body accepted: four 10,000-character answers in UTF-8 fit easily.
+MAX_BODY_BYTES = 256 * 1024
+
+
 class RateLimiter:
     """Sliding one-minute window per key."""
 
     def __init__(self, per_minute: int) -> None:
         self.per_minute = per_minute
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._swept_at = 0.0
 
     def check(self, key: str, now: float) -> None:
+        if now - self._swept_at > 60:  # forget idle keys so memory stays bounded
+            self._swept_at = now
+            for k in [k for k, q in self._hits.items() if not q or q[-1] <= now - 60]:
+                del self._hits[k]
         q = self._hits[key]
         while q and q[0] <= now - 60:
             q.popleft()
@@ -302,14 +318,15 @@ async def auth_verify(body: HandleRequest, request: Request, session: SessionDep
 
 
 @router.get("/me", response_model=Me)
-def get_me(user: UserDep) -> Me:
+def get_me(request: Request, user: UserDep) -> Me:
+    """Includes any open writeup, so the client can lock onto it at once (FR-WRITE-7)."""
     return Me(
         cf_handle=user.cf_handle,
         is_admin=user.is_admin,
         cf_rating=user.cf_rating,
         cf_rank=user.cf_rank,
         joined_at=user.joined_at,
-        writeup=None,
+        writeup=request.app.state.writeups.current(user),
     )
 
 
@@ -375,12 +392,35 @@ async def verify_repo(project_id: int, request: Request, session: SessionDep, us
     return svc.response(session, user, now_of(request))
 
 
-@router.post("/projects/{project_id}/submit", response_model=ProjectResponse)
-async def submit_project(project_id: int, request: Request, session: SessionDep, user: UserDep) -> ProjectResponse:
-    """FR-PROJ-7. The writeup session starts here once M4 lands."""
-    svc: ProjectService = request.app.state.projects
-    await svc.submit(user, project_id)
-    return svc.response(session, user, now_of(request))
+@router.post("/projects/{project_id}/submit", response_model=WriteupSession)
+async def submit_project(project_id: int, request: Request, user: UserDep) -> WriteupSession:
+    """FR-PROJ-7: freezes the entry and starts the writeup. Returns its
+    questions, snippet, and deadline."""
+    await request.app.state.projects.submit(user, project_id)
+    session = request.app.state.writeups.current(user)
+    if session is None:  # only if the time limit were zero
+        raise ApiError(409, "deadline_passed", "The writeup has already ended.")
+    return session
+
+
+@router.get("/writeups/current", response_model=WriteupSession)
+def get_writeup(request: Request, user: UserDep) -> WriteupSession:
+    session = request.app.state.writeups.current(user)
+    if session is None:
+        raise ApiError(404, "no_writeup", "You have no open writeup.")
+    return session
+
+
+@router.put("/writeups/current/draft", response_model=WriteupSession)
+def save_draft(body: DraftRequest, request: Request, user: UserDep) -> WriteupSession:
+    """FR-WRITE-5/6: rate-checked autosave. 409 carries the last accepted text."""
+    return request.app.state.writeups.save(user, body.answers)
+
+
+@router.post("/writeups/current/submit", response_model=WriteupResult)
+def submit_writeup(body: SubmitWriteupRequest, request: Request, user: UserDep) -> WriteupResult:
+    """FR-WRITE-8/10: final submit, graded immediately."""
+    return request.app.state.writeups.submit(user, body.answers)
 
 
 @router.get("/rules", response_model=RulesResponse)
@@ -415,8 +455,13 @@ def create_app(
         token=os.environ.get("GCBOARD_GITHUB_TOKEN") or config.server.github_token,
         max_bytes=config.projects.max_repo_mb * 1024 * 1024,
     )
-    projects = ProjectService(engine, config, repos, clock)
-    jobs = Jobs(engine, config, cf, clock, projects=projects)
+    writeups = WriteupService(engine, config, clock)
+    projects = ProjectService(engine, config, repos, clock, writeups=writeups)
+    backup = BackupJob(
+        config.server.database, str(config.server.backup_path), config.server.backup_keep,
+        config.general.tz, config.server.backup_time, clock,
+    )
+    jobs = Jobs(engine, config, cf, clock, projects=projects, backup=backup)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -424,6 +469,7 @@ def create_app(
         yield
         if sched is not None:
             sched.shutdown(wait=False)
+        engine.dispose()  # close pooled SQLite connections on shutdown
 
     app = FastAPI(title="gcboard", version=__version__, lifespan=lifespan)
     app.state.config = config
@@ -431,12 +477,24 @@ def create_app(
     app.state.cf = cf
     app.state.jobs = jobs
     app.state.projects = projects
+    app.state.writeups = writeups
     app.state.clock = clock
     app.state.limiter = RateLimiter(config.server.requests_per_minute)
 
+    @app.middleware("http")
+    async def _limit_body(request: Request, call_next):
+        """NFR-SEC-3: refuse oversized bodies before reading them."""
+        length = request.headers.get("content-length")
+        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            return JSONResponse(
+                {"error": "too_large", "message": f"Requests are limited to {MAX_BODY_BYTES // 1024} KB."},
+                status_code=413,
+            )
+        return await call_next(request)
+
     @app.exception_handler(ApiError)
     async def _api_error(_req: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse({"error": exc.error, "message": exc.message}, status_code=exc.status)
+        return JSONResponse(exc.body(), status_code=exc.status)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_error(_req: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -465,7 +523,11 @@ def run() -> None:
 
     import uvicorn
 
-    uvicorn.run(create_app(load_config(args.config)), host=args.host, port=args.port, proxy_headers=True)
+    try:
+        app = create_app(load_config(args.config))
+    except (OSError, ValueError, SchemaError) as exc:  # bad config file, or a database from another version
+        raise SystemExit(f"gcboard-server: {exc}")
+    uvicorn.run(app, host=args.host, port=args.port, proxy_headers=True)
 
 
 if __name__ == "__main__":

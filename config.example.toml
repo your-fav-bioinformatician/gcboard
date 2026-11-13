@@ -16,6 +16,9 @@ challenge_minutes = 5            # login challenge window
 post_retry_minutes = 5           # retry gap when Codeforces is down at post time
 post_retry_hours = 6             # give up on the day after this long
 github_token = ""                # read-only token for repo reads; GCBOARD_GITHUB_TOKEN env var overrides
+backup_dir = "backups"           # relative to the database file
+backup_keep = 14                 # newest daily backups kept
+backup_time = "03:00"            # daily, group time zone
 
 [tasks]
 rating_by_weekday = [800, 900, 1000, 1100, 1200, 1300, 1400]  # Mon..Sun
@@ -46,6 +49,19 @@ autosave_seconds = 10
 max_chars_per_second = 25
 burst_allowance_chars = 50
 max_answer_chars = 10000
+# Grading (SRD 5.3)
+gate_min_words = 20              # score 0 if any answer is shorter
+gate_min_total = 150             # ...or all answers together are shorter
+gate_max_jaccard = 0.8           # ...or two answers share more of their words
+snippet_ids_target = 3           # snippet identifiers named in Q1 for full marks
+other_ids_target = 6             # other repo identifiers named in Q2-Q4 for full marks
+ttr_window = 100
+ttr_target = 0.55
+density_full = 0.20
+density_zero = 0.45
+sentence_min = 6
+sentence_max = 35
+sentence_hard_max = 80
 
 [history]
 base = 0.4

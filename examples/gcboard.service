@@ -1,0 +1,22 @@
+# systemd unit for the gcboard server. See docs/operations.md.
+[Unit]
+Description=gcboard server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=gcboard
+WorkingDirectory=/srv/gcboard/app
+EnvironmentFile=/srv/gcboard/env
+ExecStart=/srv/gcboard/.local/bin/uv run --frozen gcboard-server --config /srv/gcboard/config.toml --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+# Hardening: the server only needs its own folder.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/gcboard
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

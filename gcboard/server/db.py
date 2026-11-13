@@ -1,7 +1,6 @@
 """Database tables (SRD section 6). SQLite in WAL mode via SQLModel.
 
-Timestamps are integer Unix epoch seconds (UTC) throughout. The writeups
-table arrives with milestone M4.
+Timestamps are integer Unix epoch seconds (UTC) throughout.
 """
 
 from __future__ import annotations
@@ -90,7 +89,7 @@ class EntryStatus:
     PENDING = "pending"  # registered, .gcboard not verified yet
     REGISTERED = "registered"  # verified; snapshots running
     UNREACHABLE = "unreachable"  # last snapshot failed (repo private or deleted)
-    SUBMITTED = "submitted"  # frozen; writeup comes next (M4)
+    SUBMITTED = "submitted"  # frozen; the writeup starts at the same moment
     VOID = "void"  # voided by the admin
 
 
@@ -131,6 +130,30 @@ class RepoSnapshot(SQLModel, table=True):
     source_loc: int
 
 
+class Writeup(SQLModel, table=True):
+    """The timed writeup for one entry. Only the latest accepted text is kept
+    (FR-WRITE-6); there is no typing history."""
+
+    __tablename__ = "writeups"
+    id: int | None = Field(default=None, primary_key=True)
+    entry_id: int = Field(foreign_key="project_entries.id", unique=True, index=True)
+    snippet_path: str
+    snippet_start: int
+    snippet_end: int
+    snippet_text: str
+    snippet_identifiers: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    repo_identifiers: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    questions: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    answers: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    started_at: int
+    deadline: int = Field(index=True)
+    last_saved_at: int
+    submitted_at: int | None = None
+    auto_submitted: bool = False
+    score: float | None = None
+    breakdown: dict | None = Field(default=None, sa_column=Column(JSON))
+
+
 class AuditLog(SQLModel, table=True):
     __tablename__ = "audit_log"
     id: int | None = Field(default=None, primary_key=True)
@@ -151,9 +174,33 @@ def _sqlite_pragmas(dbapi_conn, _record) -> None:
         cur.close()
 
 
+class SchemaError(Exception):
+    """The database was made by a different gcboard version."""
+
+
+def check_schema(engine: Engine) -> None:
+    """create_all adds missing tables but never missing columns. Refuse to run
+    on a database whose tables lack columns this version needs, instead of
+    failing later in confusing ways."""
+    problems = []
+    with engine.connect() as con:
+        for table in SQLModel.metadata.sorted_tables:
+            have = {row[1] for row in con.exec_driver_sql(f'PRAGMA table_info("{table.name}")')}
+            missing = [c.name for c in table.columns if c.name not in have]
+            if missing:
+                problems.append(f"{table.name}: {', '.join(missing)}")
+    if problems:
+        raise SchemaError(
+            "the database is missing columns this gcboard version needs ("
+            + "; ".join(problems)
+            + "). Restore a matching backup or migrate the database before starting."
+        )
+
+
 def make_engine(path: str) -> Engine:
     engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
+    check_schema(engine)
     return engine
 
 
@@ -165,9 +212,11 @@ __all__ = [
     "Project",
     "ProjectEntry",
     "RepoSnapshot",
+    "SchemaError",
     "Session",
     "TaskAttempt",
     "Token",
     "User",
+    "Writeup",
     "make_engine",
 ]

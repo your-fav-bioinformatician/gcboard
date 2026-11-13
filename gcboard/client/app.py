@@ -9,6 +9,7 @@ from textual.geometry import Size
 from textual.theme import Theme
 
 from gcboard import __version__
+from gcboard.shared.schemas import WriteupResult, WriteupSession
 
 from .api import Api, ApiError, clear_token, load_token, server_url, version_tuple
 from .screens.common import MIN_HEIGHT, MIN_WIDTH, TooSmallScreen
@@ -18,6 +19,7 @@ from .screens.profile import ProfileScreen
 from .screens.project import ProjectScreen
 from .screens.rules import RulesScreen
 from .screens.today import TodayScreen
+from .screens.writeup import WriteupScreen
 
 GCBOARD_THEME = Theme(
     name="gcboard",
@@ -43,6 +45,11 @@ Screen { padding: 0 1; }
 #today, #challenge, #rules, #profile, #project-info { height: auto; }
 #repo-url { width: 70; margin: 1 0; }
 #project-spec { margin-top: 1; }
+#answers { height: 1fr; }
+.question { height: auto; margin-bottom: 1; }
+#snippet { height: 9; max-height: 40%; border: round $panel-lighten-2; }
+#snippet-code { width: auto; }
+.answer { height: 1fr; min-height: 5; }
 ConfirmScreen, TooSmallScreen { align: center middle; }
 #dialog { width: 60; height: auto; border: round $accent; padding: 1 2; background: $panel; }
 #dialog-keys { margin-top: 1; color: $text-muted; }
@@ -74,6 +81,7 @@ class GcboardApp(App):
         super().__init__()
         self.api = Api(server_url(), load_token())
         self.handle: str | None = None
+        self.writeup: WriteupSession | None = None  # set while the writeup lock is on
 
     def on_mount(self) -> None:
         self.register_theme(GCBOARD_THEME)
@@ -100,6 +108,8 @@ class GcboardApp(App):
             try:
                 me = await self.api.me()
                 self.logged_in(me.cf_handle)
+                if me.writeup is not None:
+                    self.start_writeup(me.writeup)  # FR-WRITE-7: straight back into the writeup
                 return
             except ApiError as exc:
                 if exc.status in (401, 403):
@@ -124,9 +134,28 @@ class GcboardApp(App):
         self.refresh_bindings()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if self.writeup is not None and action in ("goto", "quit", "help_quit"):
+            return False  # FR-WRITE-3: no leaving the writeup, no quitting
         if action == "goto":
             return self.handle is not None
         return True
+
+    def start_writeup(self, session: WriteupSession) -> None:
+        """Lock the app onto the writeup until it is submitted or time runs out."""
+        self.writeup = session
+        self.push_screen(WriteupScreen(session))
+        self.refresh_bindings()
+
+    def writeup_ended(self, result: WriteupResult | None) -> None:
+        self.writeup = None
+        while isinstance(self.screen, WriteupScreen) or len(self.screen_stack) > 1:
+            self.pop_screen()
+        if result is not None:
+            how = "auto-submitted at the deadline" if result.auto_submitted else "submitted"
+            verdict = "passed" if result.passed else "below the pass mark"
+            self.notify(f"Writeup {how}: {result.score:g}/100 ({verdict}).", timeout=10)
+        self.go("project")
+        self.refresh_bindings()
 
     def action_goto(self, mode: str) -> None:
         if self.current_mode != mode:

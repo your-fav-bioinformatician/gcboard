@@ -164,7 +164,8 @@ def test_snapshots_history_and_submit(app, client, cf, repos, clock, project):
     clock.t += 3600
     r = client.post(url(project, "submit"), headers=h)
     assert r.status_code == 200, r.text
-    e = r.json()["entry"]
+    assert len(r.json()["questions"]) == 4  # the writeup starts right away
+    e = client.get("/api/v1/projects/current", headers=h).json()["entry"]
     assert e["status"] == "submitted" and e["frozen_sha"] == sha and e["submitted_at"] == int(clock())
     assert e["snapshots"][-1]["kind"] == "submission" and e["snapshots"][-1]["source_loc"] == 300
     assert e["history_factor"] == 1.0
@@ -185,8 +186,9 @@ def test_dump_on_submission_day(client, cf, repos, clock, project):
     h = login(client, cf, clock, "noor")
     register_and_verify(client, repos, h, project, lines=0)
     repos.push(REPO, {".gcboard": "x", "main.py": code_lines(500)})
-    r = client.post(url(project, "submit"), headers=h)
-    assert r.json()["entry"]["history_factor"] == 0.5  # SRD 5.4: all at once scores 0.5
+    assert client.post(url(project, "submit"), headers=h).status_code == 200
+    e = client.get("/api/v1/projects/current", headers=h).json()["entry"]
+    assert e["history_factor"] == 0.5  # SRD 5.4: all at once scores 0.5
 
 
 def test_submit_requires_source_files_and_open_project(client, cf, repos, clock, project):
@@ -199,7 +201,7 @@ def test_submit_requires_source_files_and_open_project(client, cf, repos, clock,
     clock.t += 15 * DAY  # closed
     r = client.post(url(project, "submit"), headers=h)
     assert r.status_code == 409 and r.json()["error"] == "project_closed"
-    assert client.get("/api/v1/projects/current", headers=h).json()["project"] is None
+    assert client.get("/api/v1/projects/current", headers=h).json()["project"]["is_open"] is False
 
 
 def test_admin_project_create_and_overlap(tmp_path, config, capsys):

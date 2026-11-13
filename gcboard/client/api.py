@@ -67,9 +67,10 @@ def version_tuple(v: str) -> tuple[int, ...]:
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, error: str, message: str) -> None:
+    def __init__(self, status: int, error: str, message: str, body: dict | None = None) -> None:
         super().__init__(message)
         self.status, self.error, self.message = status, error, message
+        self.body = body or {}  # e.g. "answers" on a rejected writeup save
 
 
 class Api:
@@ -95,7 +96,9 @@ class Api:
             body = None
         if r.status_code >= 400:
             body = body if isinstance(body, dict) else {}
-            raise ApiError(r.status_code, body.get("error", "http_error"), body.get("message", f"HTTP {r.status_code}"))
+            raise ApiError(
+                r.status_code, body.get("error", "http_error"), body.get("message", f"HTTP {r.status_code}"), body
+            )
         return body
 
     async def sync_clock(self) -> schemas.TimeResponse:
@@ -145,8 +148,22 @@ class Api:
             await self._request("POST", f"/projects/{project_id}/register/verify")
         )
 
-    async def submit_project(self, project_id: int) -> schemas.ProjectResponse:
-        return schemas.ProjectResponse.model_validate(await self._request("POST", f"/projects/{project_id}/submit"))
+    async def submit_project(self, project_id: int) -> schemas.WriteupSession:
+        """Freezes the entry and starts the locked writeup."""
+        return schemas.WriteupSession.model_validate(await self._request("POST", f"/projects/{project_id}/submit"))
+
+    async def writeup(self) -> schemas.WriteupSession:
+        return schemas.WriteupSession.model_validate(await self._request("GET", "/writeups/current"))
+
+    async def save_draft(self, answers: list[str]) -> schemas.WriteupSession:
+        return schemas.WriteupSession.model_validate(
+            await self._request("PUT", "/writeups/current/draft", json={"answers": answers})
+        )
+
+    async def submit_writeup(self, answers: list[str] | None) -> schemas.WriteupResult:
+        return schemas.WriteupResult.model_validate(
+            await self._request("POST", "/writeups/current/submit", json={"answers": answers})
+        )
 
     async def rules(self) -> schemas.RulesResponse:
         return schemas.RulesResponse.model_validate(await self._request("GET", "/rules"))

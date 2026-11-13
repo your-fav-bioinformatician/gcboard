@@ -42,10 +42,25 @@ def text(app, selector: str) -> str:
     return str(app.screen.query_one(selector, Static).render())
 
 
+# SRD 9.1: plain ASCII and box-drawing characters only, no emoji or icon fonts.
+# Also allowed: the middle dot used in the SRD's own leaderboard mockup, and the
+# block elements Textual draws scrollbars and tab underlines with.
+def allowed_glyph(ch: str) -> bool:
+    cp = ord(ch)
+    return cp < 0x80 or cp == 0xB7 or 0x2500 <= cp <= 0x259F
+
+
+def assert_glyphs(app) -> None:
+    bad = sorted({ch for ch in app.export_screenshot() if not allowed_glyph(ch)})
+    assert not bad, f"{type(app.screen).__name__} draws non-ASCII glyphs: {[f'U+{ord(c):04X}' for c in bad]}"
+
+
 async def settle(pilot) -> None:
+    """Wait for workers and redraws, then check the screen's glyphs."""
     for _ in range(3):
         await pilot.app.workers.wait_for_complete()
         await pilot.pause(0.05)
+    assert_glyphs(pilot.app)
 
 
 def test_login_today_and_board(server, cf, clock, tmp_path):
@@ -194,8 +209,154 @@ def test_project_register_verify_submit(server, cf, repos, clock, tmp_path):
             assert isinstance(app.screen, ConfirmScreen)
             await pilot.press("y")
             await settle(pilot)
-            info = text(app, "#project-info")
-            assert "submitted" in info and "history" in info
-            app.save_screenshot(str(tmp_path / "project.svg"))
+            from gcboard.client.screens.writeup import WriteupScreen
+
+            assert isinstance(app.screen, WriteupScreen)  # the locked writeup starts at once
 
     asyncio.run(scenario())
+
+
+def test_writeup_lock_paste_relaunch_and_submit(server, cf, repos, clock, tmp_path):
+    from sqlmodel import Session
+    from textual import events
+    from textual.widgets import TabbedContent, TextArea
+
+    from gcboard.client.app import GcboardApp
+    from gcboard.client.screens.common import ConfirmScreen
+    from gcboard.client.screens.writeup import WriteupScreen
+    from gcboard.server.db import Project
+
+    from .sample_writeup import ANSWERS, FILES
+
+    with Session(server.state.engine) as s:
+        s.add(Project(title="TTT", spec_md="# TTT", opens_at=int(clock()) - 3600,
+                      closes_at=int(clock()) + 14 * 86400, change_question="How would you add undo?",
+                      change_keyword_groups=[["undo"], ["stack"]]))
+        s.commit()
+    repo = "https://github.com/noor/ttt"
+    repos.push(repo, {"README.md": "new"})
+
+    async def into_writeup(app, pilot):
+        cf.add_user("noor")
+        await settle(pilot)
+        await pilot.press(*"noor", "enter")
+        await settle(pilot)
+        ch = app.screen.challenge
+        cf.submit("noor", ch.contest_id, ch.index, int(clock()) + 5, "COMPILATION_ERROR")
+        await pilot.press("v")
+        await settle(pilot)
+        await pilot.press("p")
+        await settle(pilot)
+        await pilot.press("e")
+        await pilot.press(*"github.com/noor/ttt", "enter")
+        await settle(pilot)
+        code = next(w for w in str(app.screen.query_one("#project-info").render()).split() if w.startswith("gcboard-"))
+        repos.push(repo, {".gcboard": code})
+        await pilot.press("v")
+        await settle(pilot)
+        repos.push(repo, {".gcboard": code, **FILES})  # the finished project
+        await pilot.press("s")
+        await settle(pilot)
+        await pilot.press("y")
+        await settle(pilot)
+
+    async def first_run():
+        app = GcboardApp()
+        async with app.run_test(size=(100, 32)) as pilot:
+            await into_writeup(app, pilot)
+            screen = app.screen
+            assert isinstance(screen, WriteupScreen) and app.writeup is not None
+            assert "undo" in str(screen.query_one("#q3 .question").render())
+
+            # Locked: navigation and quitting do nothing (FR-WRITE-3).
+            await pilot.press("l", "t", "question_mark", "ctrl+q", "q")
+            await settle(pilot)
+            assert app.screen is screen and app.return_code is None
+            a1 = screen.query_one("#a1", TextArea)
+            assert a1.text == "lt?q"  # with the editor focused, letters are just text
+            a1.load_text("")
+
+            await pilot.press(*"hello there")
+            assert a1.text == "hello there"
+            # Pasting is refused both ways (FR-WRITE-4).
+            a1.post_message(events.Paste("pasted from somewhere"))
+            await settle(pilot)
+            app.copy_to_clipboard("from the clipboard")
+            await pilot.press("ctrl+v")
+            await settle(pilot)
+            assert a1.text == "hello there"
+            assert "Pasting is disabled" in text(app, "#status")
+
+            from textual.containers import VerticalScroll
+
+            snippet = screen.query_one("#snippet", VerticalScroll)
+            await pilot.press("ctrl+n")
+            await settle(pilot)
+            assert snippet.scroll_y == 3 or snippet.max_scroll_y < 3  # code scrolls without leaving the answer
+            await pilot.press("ctrl+p", "ctrl+down")
+            await settle(pilot)
+            assert snippet.scroll_y == 3 or snippet.max_scroll_y < 3
+            assert a1.has_focus
+
+            await pilot.press("tab")
+            assert screen.query_one(TabbedContent).active == "q2" and screen.query_one("#a2", TextArea).has_focus
+            await pilot.press("shift+tab")
+            assert screen.query_one(TabbedContent).active == "q1"
+
+            clock.advance(10)
+            screen.save()
+            await settle(pilot)
+            # Text that grows faster than typing is rolled back to the last save (FR-WRITE-6).
+            a1.load_text("hello there " + "x" * 2000)
+            screen.save()
+            await settle(pilot)
+            assert a1.text == "hello there"
+            assert "faster than anyone can type" in text(app, "#status")
+
+    async def relaunch_and_submit():
+        app = GcboardApp()  # e.g. after a crash: straight back into the writeup (FR-WRITE-7)
+        async with app.run_test(size=(100, 32)) as pilot:
+            await settle(pilot)
+            screen = app.screen
+            assert isinstance(screen, WriteupScreen)
+            assert screen.query_one("#a1", TextArea).text == "hello there"
+            await pilot.press("ctrl+s")
+            await settle(pilot)
+            assert "Not enough words yet" in text(app, "#status")
+            for i, answer in enumerate(ANSWERS):
+                screen.query_one(f"#a{i + 1}", TextArea).load_text(answer)
+            clock.advance(300)
+            await pilot.press("ctrl+s")
+            await settle(pilot)
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("y")
+            await settle(pilot)
+            assert app.writeup is None and app.current_mode == "project"
+            info = text(app, "#project-info")
+            assert "qualified" in info and "grounding" in info and "submission rank #1" in info
+            app.save_screenshot(str(tmp_path / "result.svg"))
+
+    asyncio.run(first_run())
+    asyncio.run(relaunch_and_submit())
+
+
+def test_outdated_client_is_told_to_update(server):
+    from gcboard.client.app import GcboardApp
+
+    server.state.config.server.min_client_version = "99.0.0"
+
+    messages = []
+
+    async def scenario():
+        app = GcboardApp()
+        real_exit = app.exit
+        app.exit = lambda result=None, return_code=0, message=None: (  # noqa: E731
+            messages.append(message), real_exit(result, return_code, message))
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.app.workers.wait_for_complete()
+            await pilot.pause(0.1)
+        return app
+
+    app = asyncio.run(scenario())
+    assert app.return_code == 1  # exits before showing any screen
+    assert "too old" in messages[0] and "uv tool upgrade gcboard" in messages[0]

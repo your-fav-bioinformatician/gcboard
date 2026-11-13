@@ -18,9 +18,39 @@ from .common import ConfirmScreen, fmt_countdown, fmt_local, row
 
 REFRESH_SECONDS = 30
 SUBMIT_WARNING = (
-    "Submit your project now? This freezes your repository at its current commit. "
+    "Submit your project now? This freezes your repository at its current commit and immediately "
+    "starts the {minutes}-minute locked writeup. You can't leave it, pause it, or paste into it. "
     "You can only submit once."
 )
+
+CATEGORIES = [
+    ("completeness", "completeness", 20),
+    ("grounding", "grounding", 30),
+    ("change_relevance", "change relevance", 25),
+    ("variety", "variety", 10),
+    ("identifier_density", "identifier density", 10),
+    ("sentences", "sentences", 5),
+]
+
+
+def render_result(e: EntryInfo) -> list[str]:
+    w = e.writeup
+    if w is None:
+        return [row("writeup", "in progress")]
+    how = " (auto-submitted)" if w.auto_submitted else ""
+    verdict = "[$success]qualified[/]" if w.passed else "[$error]below the pass mark - 0 points[/]"
+    lines = [row("writeup", f"[b]{w.score:g}[/]/100{how} - {verdict}")]
+    b = w.breakdown
+    if not b.get("gate_passed", True):
+        lines.append(row("", f"[$error]gate failed: {escape(str(b.get('gate_reason')))}[/]"))
+    for key, label, top in CATEGORIES:
+        lines.append(f"  [$text-muted]{label:<20}[/] {b.get(key, 0):>5g} / {top}")
+    if w.passed:
+        rank = f"#{e.submit_rank}" if e.submit_rank else "-"
+        pts = f"~{e.points}" if e.provisional else str(e.points)
+        lines.append(row("result", f"submission rank [b]{rank}[/] - [b]{pts}[/] points"
+                                   + ("  (~ provisional until close)" if e.provisional else "")))
+    return lines
 
 
 def render_entry(e: EntryInfo | None, max_loc: int) -> list[str]:
@@ -50,7 +80,7 @@ def render_entry(e: EntryInfo | None, max_loc: int) -> list[str]:
         sha = (e.frozen_sha or "")[:7]
         lines.append(row("status", f"[$success]submitted[/] {fmt_local(e.submitted_at or 0)} at [b]{sha}[/]"))
         lines.append(row("history", f"[b]{factor}[/]"))
-        lines.append("[$text-muted]Writeups and project points arrive in the next gcboard update.[/]")
+        lines += render_result(e)
     else:
         lines.append(row("status", "[$error]voided by the admin[/]"))
     if e.snapshots:
@@ -72,12 +102,21 @@ def render_project(d: ProjectResponse, now: float) -> tuple[str, str]:
             )
         return "> project", "\n".join(info)
     p = d.project
-    lines = [
-        row("window", f"{fmt_local(p.opens_at)} -> {fmt_local(p.closes_at)}"),
-        row("closes in", f"[b]{fmt_countdown(p.closes_at - now)}[/]"),
-        *render_entry(d.entry, d.max_registration_loc),
-    ]
-    return f"> project {escape(p.title)}", "\n".join(lines)
+    lines = [row("window", f"{fmt_local(p.opens_at)} -> {fmt_local(p.closes_at)}")]
+    if p.is_open:
+        lines.append(row("closes in", f"[b]{fmt_countdown(p.closes_at - now)}[/]"))
+        lines += render_entry(d.entry, d.max_registration_loc)
+    else:
+        lines.append(row("state", "closed"))
+        if d.entry is not None and d.entry.status == "submitted":
+            lines += render_entry(d.entry, d.max_registration_loc)
+        else:
+            lines.append("You did not submit this project.")
+    if d.upcoming:
+        u = d.upcoming
+        lines += ["", f"Next: [b]{escape(u.title)}[/] opens {fmt_local(u.opens_at)} (in {fmt_countdown(u.opens_at - now)})."]
+    suffix = "" if p.is_open else " (closed)"
+    return f"> project {escape(p.title)}{suffix}", "\n".join(lines)
 
 
 class ProjectScreen(Screen):
@@ -119,7 +158,7 @@ class ProjectScreen(Screen):
         return self.data.entry if self.data else None
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
-        is_open = bool(self.data and self.data.project)
+        is_open = bool(self.data and self.data.project and self.data.project.is_open)
         status = self._entry.status if self._entry else None
         if action == "edit_repo":
             return is_open and status in (None, "pending")
@@ -213,14 +252,15 @@ class ProjectScreen(Screen):
                 self._status("Freezing your repository...")
                 self.submit(project_id)
 
-        self.app.push_screen(ConfirmScreen(SUBMIT_WARNING), answered)
+        minutes = self.data.writeup_minutes
+        self.app.push_screen(ConfirmScreen(SUBMIT_WARNING.format(minutes=minutes)), answered)
 
     @work(exclusive=True, group="action")
     async def submit(self, project_id: int) -> None:
         try:
-            data = await self.app.api.submit_project(project_id)
+            session = await self.app.api.submit_project(project_id)
         except ApiError as exc:
             self._status(exc.message, error=True)
             return
-        self._status("Submitted.")
-        self._apply(data)
+        self._status("")
+        self.app.start_writeup(session)
