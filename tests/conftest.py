@@ -95,3 +95,54 @@ def config(tmp_path) -> Config:
 @pytest.fixture
 def rng() -> random.Random:
     return random.Random(42)
+
+
+class FakeRepos:
+    """In-memory stand-in for GitHub: url -> {head, private, commits{sha: {path: bytes}}}."""
+
+    def __init__(self) -> None:
+        self.repos: dict[str, dict] = {}
+        self.down = False
+        self.downloads = 0
+        self._n = 0
+
+    def push(self, url: str, files: dict[str, str]) -> str:
+        """Commit a full new tree (path -> text) to the repo and return its SHA."""
+        repo = self.repos.setdefault(url, {"private": False, "commits": {}, "head": None})
+        self._n += 1
+        sha = f"{self._n:040x}"
+        repo["commits"][sha] = {p: t.encode() for p, t in files.items()}
+        repo["head"] = sha
+        return sha
+
+    def _repo(self, ref):
+        from gcboard.server.repos import RepoError, RepoUnavailable
+
+        if self.down:
+            raise RepoError("down")
+        repo = self.repos.get(ref.url)
+        if repo is None or repo["private"]:
+            raise RepoUnavailable("repository not found, or it is private")
+        if repo["head"] is None:
+            raise RepoUnavailable("repository is empty")
+        return repo
+
+    async def head_sha(self, ref):
+        return self._repo(ref)["head"]
+
+    async def files_at(self, ref, sha):
+        from gcboard.server.repos import VERIFY_FILE, RepoFiles, is_source_path
+
+        self.downloads += 1
+        tree = self._repo(ref)["commits"][sha]
+        verify = tree.get(VERIFY_FILE)
+        return RepoFiles(
+            sha=sha,
+            sources={p: b for p, b in tree.items() if is_source_path(p)},
+            verify_file=verify.decode() if verify is not None else None,
+        )
+
+
+@pytest.fixture
+def repos() -> FakeRepos:
+    return FakeRepos()

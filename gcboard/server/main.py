@@ -30,6 +30,9 @@ from gcboard.shared.schemas import (
     LeaderboardResponse,
     Me,
     ProblemInfo,
+    Profile,
+    ProjectResponse,
+    RegisterRequest,
     RulesResponse,
     TimeResponse,
     TodayResponse,
@@ -40,19 +43,17 @@ from gcboard.shared.schemas import (
 from . import board
 from .codeforces import CodeforcesAPI, CodeforcesClient, CodeforcesError, CodeforcesNotFound, problem_key, problem_url, submission_key
 from .config import Config, load_config
+from .errors import ApiError
 from .db import AuthChallenge, DailyTask, TaskAttempt, Token, User, make_engine
 from .jobs import Jobs, start_scheduler
+from .projects import ProjectService
+from .repos import GitHubClient, RepoHost
 
 log = logging.getLogger("gcboard")
 
 # A challenge may be confirmed for this long after it expires, as long as the
 # compilation-error submission itself was made inside the 5-minute window.
 VERIFY_GRACE_SECONDS = 600
-
-
-class ApiError(Exception):
-    def __init__(self, status: int, error: str, message: str) -> None:
-        self.status, self.error, self.message = status, error, message
 
 
 class RateLimiter:
@@ -319,6 +320,15 @@ def get_leaderboard(
     return board.leaderboard(session, request.app.state.config, period, now_of(request))
 
 
+@router.get("/users/{handle}", response_model=Profile)
+def get_profile(handle: str, request: Request, session: SessionDep, _user: UserDep) -> Profile:
+    """FR-PROF-1/3: any member can see any profile; banned members are hidden."""
+    target = find_user(session, handle)
+    if target is None or target.banned:
+        raise ApiError(404, "user_not_found", f"No member named {handle!r}.")
+    return board.profile(session, request.app.state.config, target, now_of(request))
+
+
 @router.get("/tasks/today", response_model=TodayResponse)
 def get_today(request: Request, session: SessionDep, user: UserDep) -> TodayResponse:
     return today_response(session, user, now_of(request))
@@ -343,6 +353,36 @@ def start_today(request: Request, session: SessionDep, user: UserDep) -> TodayRe
     return today_response(session, user, now)
 
 
+@router.get("/projects/current", response_model=ProjectResponse)
+def get_current_project(request: Request, session: SessionDep, user: UserDep) -> ProjectResponse:
+    return request.app.state.projects.response(session, user, now_of(request))
+
+
+@router.post("/projects/{project_id}/register", response_model=ProjectResponse)
+async def register_repo(
+    project_id: int, body: RegisterRequest, request: Request, session: SessionDep, user: UserDep
+) -> ProjectResponse:
+    """FR-PROJ-3/4: returns the verification code to commit as .gcboard."""
+    svc: ProjectService = request.app.state.projects
+    await svc.register(user, project_id, body.repo_url)
+    return svc.response(session, user, now_of(request))
+
+
+@router.post("/projects/{project_id}/register/verify", response_model=ProjectResponse)
+async def verify_repo(project_id: int, request: Request, session: SessionDep, user: UserDep) -> ProjectResponse:
+    svc: ProjectService = request.app.state.projects
+    await svc.verify(user, project_id)
+    return svc.response(session, user, now_of(request))
+
+
+@router.post("/projects/{project_id}/submit", response_model=ProjectResponse)
+async def submit_project(project_id: int, request: Request, session: SessionDep, user: UserDep) -> ProjectResponse:
+    """FR-PROJ-7. The writeup session starts here once M4 lands."""
+    svc: ProjectService = request.app.state.projects
+    await svc.submit(user, project_id)
+    return svc.response(session, user, now_of(request))
+
+
 @router.get("/rules", response_model=RulesResponse)
 def get_rules(request: Request, _user: UserDep) -> RulesResponse:
     c: Config = request.app.state.config
@@ -365,12 +405,18 @@ def create_app(
     config: Config,
     *,
     cf: CodeforcesAPI | None = None,
+    repos: RepoHost | None = None,
     clock: Callable[[], float] = time.time,
     run_scheduler: bool = True,
 ) -> FastAPI:
     engine = make_engine(config.server.database)
     cf = cf or CodeforcesClient(min_interval=config.server.codeforces_min_interval)
-    jobs = Jobs(engine, config, cf, clock)
+    repos = repos or GitHubClient(
+        token=os.environ.get("GCBOARD_GITHUB_TOKEN") or config.server.github_token,
+        max_bytes=config.projects.max_repo_mb * 1024 * 1024,
+    )
+    projects = ProjectService(engine, config, repos, clock)
+    jobs = Jobs(engine, config, cf, clock, projects=projects)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -384,6 +430,7 @@ def create_app(
     app.state.engine = engine
     app.state.cf = cf
     app.state.jobs = jobs
+    app.state.projects = projects
     app.state.clock = clock
     app.state.limiter = RateLimiter(config.server.requests_per_minute)
 

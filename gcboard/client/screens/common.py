@@ -23,6 +23,13 @@ def fmt_duration(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def fmt_countdown(seconds: float) -> str:
+    """Like fmt_duration, with a day count for long spans: 13d 4:02:11."""
+    s = max(0, int(seconds))
+    days, rem = divmod(s, 86400)
+    return f"{days}d {fmt_duration(rem)}" if days else fmt_duration(rem)
+
+
 def fmt_local(epoch: float) -> str:
     """Server timestamp shown in the member's local time."""
     return datetime.fromtimestamp(epoch).strftime("%a %d %b %H:%M")

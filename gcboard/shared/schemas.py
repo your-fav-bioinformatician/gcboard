@@ -99,6 +99,34 @@ class LeaderboardResponse(BaseModel):
     rows: list[BoardRow]
 
 
+class ProjectHistoryRow(BaseModel):
+    title: str
+    submit_rank: int | None
+    writeup_score: float | None
+    history_factor: float | None
+    points: int
+    provisional: bool
+
+
+class Profile(BaseModel):
+    """FR-PROF-1. Visible to every member; writeup answers are never included."""
+
+    cf_handle: str
+    cf_rating: int | None
+    cf_rank: str | None
+    rating_synced_at: int | None
+    joined_at: int
+    current_streak: int
+    best_streak: int
+    solved_week: int
+    solved_all: int
+    avg_solve_seconds: int | None
+    fastest_solve_seconds: int | None
+    weekly_wins: int
+    best_weekly_finish: int | None
+    projects: list[ProjectHistoryRow]
+
+
 class RulesResponse(BaseModel):
     timezone: str
     daily_post_time: str
@@ -106,3 +134,51 @@ class RulesResponse(BaseModel):
     projects: dict[str, Any]
     writeup: dict[str, Any]
     history: dict[str, Any]
+
+
+class RegisterRequest(BaseModel):
+    repo_url: str = Field(min_length=10, max_length=200)
+
+
+class SnapshotInfo(BaseModel):
+    taken_at: int
+    kind: Literal["registration", "daily", "submission"]
+    head_sha: str
+    source_loc: int
+
+
+class EntryInfo(BaseModel):
+    repo_url: str
+    status: Literal["pending", "registered", "unreachable", "submitted", "void"]
+    verify_code: str | None  # only while the .gcboard file is not verified yet
+    registered_at: int
+    verified_at: int | None
+    submitted_at: int | None
+    frozen_sha: str | None
+    history_factor: float | None  # final once submitted; otherwise "if you submitted now"
+    snapshots: list[SnapshotInfo]
+
+
+class ProjectInfo(BaseModel):
+    """The change question is not included: it is revealed in the writeup (FR-WRITE-1)."""
+
+    id: int
+    title: str
+    spec_md: str
+    opens_at: int
+    closes_at: int
+
+
+class UpcomingProject(BaseModel):
+    id: int
+    title: str
+    opens_at: int
+    closes_at: int
+
+
+class ProjectResponse(BaseModel):
+    server_time: float
+    project: ProjectInfo | None
+    upcoming: UpcomingProject | None
+    entry: EntryInfo | None
+    max_registration_loc: int

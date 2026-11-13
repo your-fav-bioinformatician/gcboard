@@ -54,6 +54,9 @@ class ServerConfig(_Section):
     challenge_minutes: int = 5
     post_retry_minutes: int = 5
     post_retry_hours: int = 6
+    # Read-only GitHub token for repo reads. Prefer the GCBOARD_GITHUB_TOKEN
+    # environment variable, which overrides this. Never sent to clients.
+    github_token: str = ""
 
 
 class TasksConfig(_Section):
@@ -90,6 +93,14 @@ class TasksConfig(_Section):
 class ProjectsConfig(_Section):
     length_days: int = 14
     max_registration_loc: int = 50
+    snapshot_time: str = "12:00"  # daily snapshots, group time zone
+    max_repo_mb: int = 50  # largest repo download the server accepts
+
+    @field_validator("snapshot_time")
+    @classmethod
+    def _check_snapshot_time(cls, v: str) -> str:
+        parse_hhmm(v)
+        return v
     speed_max: float = 300
     speed_decay: float = 0.85
     speed_min: float = 90

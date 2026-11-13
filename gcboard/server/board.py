@@ -1,87 +1,170 @@
-"""Leaderboards and streaks (FR-BOARD-*, FR-PROF-2), computed from stored scores."""
+"""Leaderboards, streaks, and profiles (FR-BOARD-*, FR-PROF-*), computed from
+stored scores. Banned members and voided attempts never count."""
 
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Literal
 
 from sqlmodel import Session, select
 
-from gcboard.shared.schemas import BoardRow, LeaderboardResponse
+from gcboard.shared.schemas import BoardRow, LeaderboardResponse, Profile, ProjectHistoryRow
 
 from . import scoring
 from .config import Config
-from .db import DailyTask, TaskAttempt, User
+from .db import DailyTask, EntryStatus, Project, ProjectEntry, TaskAttempt, User
 from .timewin import week_of
 
 
-def all_streaks(session: Session, now: float) -> dict[int, tuple[int, int]]:
-    """(current, best) streak for every user."""
-    tasks = session.exec(select(DailyTask).order_by(DailyTask.task_date)).all()
+@dataclass
+class _Data:
+    """Everything the board and profiles need, loaded once per request."""
+
+    tasks: dict[int, DailyTask]
+    users: dict[int, User]  # not banned
+    solved: list[TaskAttempt]  # accepted, not voided, by a non-banned member
+
+
+def _load(session: Session) -> _Data:
+    tasks = {t.id: t for t in session.exec(select(DailyTask)).all()}
+    users = {u.id: u for u in session.exec(select(User).where(User.banned == False)).all()}  # noqa: E712
+    solved = [
+        a
+        for a in session.exec(
+            select(TaskAttempt).where(TaskAttempt.accepted_at != None, TaskAttempt.voided_at == None)  # noqa: E711
+        ).all()
+        if a.user_id in users and a.task_id in tasks
+    ]
+    return _Data(tasks, users, solved)
+
+
+def _monday(task_date: str) -> date:
+    d = date.fromisoformat(task_date)
+    return d - timedelta(days=d.weekday())
+
+
+@dataclass
+class _Totals:
+    points: int = 0
+    solved: int = 0
+    solve_seconds: int = 0
+    reached_at: int = 0
+    provisional: bool = False
+
+
+def _rank(attempts: list[TaskAttempt]) -> tuple[list[tuple[int, scoring.BoardEntry]], dict[int, _Totals]]:
+    """Rank members by their attempts in one period. Members without a solve
+    in the period are left out (they appear once they score)."""
+    totals: dict[int, _Totals] = defaultdict(_Totals)
+    for a in attempts:
+        t = totals[a.user_id]
+        t.points += a.points
+        t.solved += 1
+        t.solve_seconds += a.solve_seconds or 0
+        t.reached_at = max(t.reached_at, a.accepted_at or 0)
+        t.provisional = t.provisional or a.provisional
+    # Project points join here in M3/M4 (projects that closed in the period).
+    entries = [
+        scoring.BoardEntry(uid, t.points, t.solved, t.solve_seconds, t.reached_at) for uid, t in totals.items()
+    ]
+    return scoring.rank_board(entries), totals
+
+
+def _streaks(data: _Data, now: float) -> dict[int, tuple[int, int]]:
+    """(current, best) streak for every non-banned member."""
+    ordered = sorted(data.tasks.values(), key=lambda t: t.task_date)
     solved: dict[int, set[int]] = defaultdict(set)
-    for a in session.exec(
-        select(TaskAttempt).where(TaskAttempt.accepted_at != None, TaskAttempt.voided_at == None)  # noqa: E711
-    ).all():
+    for a in data.solved:
         solved[a.user_id].add(a.task_id)
-    users = session.exec(select(User.id)).all()
     return {
-        uid: scoring.streaks([(t.closes_at <= now, t.id in solved[uid]) for t in tasks])
-        for uid in users
+        uid: scoring.streaks([(t.closes_at <= now, t.id in solved[uid]) for t in ordered]) for uid in data.users
     }
 
 
 def leaderboard(session: Session, config: Config, period: Literal["week", "all"], now: float) -> LeaderboardResponse:
+    data = _load(session)
     week = week_of(now, config.general.tz)
-    task_q = select(DailyTask)
     if period == "week":
-        task_q = task_q.where(
-            DailyTask.task_date >= week.monday.isoformat(), DailyTask.task_date <= week.sunday.isoformat()
-        )
-    tasks = {t.id: t for t in session.exec(task_q).all()}
-    users = {u.id: u for u in session.exec(select(User).where(User.banned == False)).all()}  # noqa: E712
-
-    totals: dict[int, dict] = {}
-    if tasks:
-        attempts = session.exec(
-            select(TaskAttempt).where(
-                TaskAttempt.task_id.in_(list(tasks)),  # type: ignore[attr-defined]
-                TaskAttempt.accepted_at != None,  # noqa: E711
-                TaskAttempt.voided_at == None,  # noqa: E711
-            )
-        ).all()
-        for a in attempts:
-            if a.user_id not in users:
-                continue
-            t = totals.setdefault(
-                a.user_id, {"points": 0, "solved": 0, "solve": 0, "reached": 0, "provisional": False}
-            )
-            t["points"] += a.points
-            t["solved"] += 1
-            t["solve"] += a.solve_seconds or 0
-            t["reached"] = max(t["reached"], a.accepted_at or 0)
-            t["provisional"] = t["provisional"] or a.provisional
-    # Project points join here in M3/M4 (projects that closed in the period).
-
-    entries = [
-        scoring.BoardEntry(uid, t["points"], t["solved"], t["solve"], t["reached"]) for uid, t in totals.items()
-    ]
-    streaks = all_streaks(session, now)
+        attempts = [a for a in data.solved if _monday(data.tasks[a.task_id].task_date) == week.monday]
+    else:
+        attempts = data.solved
+    ranked, totals = _rank(attempts)
+    streaks = _streaks(data, now)
     rows = [
         BoardRow(
             rank=rank,
-            cf_handle=users[e.key].cf_handle,
+            cf_handle=data.users[e.key].cf_handle,
             points=e.points,
-            provisional=totals[e.key]["provisional"],
+            provisional=totals[e.key].provisional,
             solved=e.solved,
-            streak=streaks.get(e.key, (0, 0))[0],
+            streak=streaks[e.key][0],
         )
-        for rank, e in scoring.rank_board(entries)
+        for rank, e in ranked
     ]
     if period == "week":
-        label = f"week {week.iso_week} · ends Sun 23:59"
-        ends_at: int | None = week.ends_at
-    else:
-        label = "all time"
-        ends_at = None
-    return LeaderboardResponse(period=period, label=label, ends_at=ends_at, rows=rows)
+        return LeaderboardResponse(
+            period=period, label=f"week {week.iso_week} · ends Sun 23:59", ends_at=week.ends_at, rows=rows
+        )
+    return LeaderboardResponse(period=period, label="all time", ends_at=None, rows=rows)
 
+
+def weekly_finishes(data: _Data, current_monday: date) -> dict[int, list[int]]:
+    """Each member's rank in every completed week they scored in."""
+    by_week: dict[date, list[TaskAttempt]] = defaultdict(list)
+    for a in data.solved:
+        monday = _monday(data.tasks[a.task_id].task_date)
+        if monday < current_monday:
+            by_week[monday].append(a)
+    finishes: dict[int, list[int]] = defaultdict(list)
+    for attempts in by_week.values():
+        for rank, e in _rank(attempts)[0]:
+            finishes[e.key].append(rank)
+    return finishes
+
+
+def profile(session: Session, config: Config, user: User, now: float) -> Profile:
+    """FR-PROF-1. Project rank, writeup score and points are filled in by M4."""
+    data = _load(session)
+    week = week_of(now, config.general.tz)
+    mine = [a for a in data.solved if a.user_id == user.id]
+    times = [a.solve_seconds for a in mine if a.solve_seconds is not None]
+    current, best = _streaks(data, now).get(user.id, (0, 0))
+    finishes = weekly_finishes(data, week.monday).get(user.id, [])
+    return Profile(
+        cf_handle=user.cf_handle,
+        cf_rating=user.cf_rating,
+        cf_rank=user.cf_rank,
+        rating_synced_at=user.rating_synced_at,
+        joined_at=user.joined_at,
+        current_streak=current,
+        best_streak=best,
+        solved_week=sum(1 for a in mine if _monday(data.tasks[a.task_id].task_date) == week.monday),
+        solved_all=len(mine),
+        avg_solve_seconds=round(sum(times) / len(times)) if times else None,
+        fastest_solve_seconds=min(times) if times else None,
+        weekly_wins=sum(1 for r in finishes if r == 1),
+        best_weekly_finish=min(finishes) if finishes else None,
+        projects=_project_history(session, user),
+    )
+
+
+def _project_history(session: Session, user: User) -> list[ProjectHistoryRow]:
+    rows = session.exec(
+        select(ProjectEntry, Project)
+        .join(Project, Project.id == ProjectEntry.project_id)
+        .where(ProjectEntry.user_id == user.id, ProjectEntry.status == EntryStatus.SUBMITTED)
+        .order_by(Project.opens_at)
+    ).all()
+    return [
+        ProjectHistoryRow(
+            title=p.title,
+            submit_rank=e.submit_rank,
+            writeup_score=None,  # M4
+            history_factor=e.history_factor,
+            points=e.points,
+            provisional=p.finalized_at is None,
+        )
+        for e, p in rows
+    ]
